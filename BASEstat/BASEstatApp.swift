@@ -21,6 +21,9 @@ struct BASEstatApp: App {
                     // Pobierz dane przy starcie aplikacji
                     baselinkerService.fetchOrders()
                     
+                    // Pobierz dane produktów z magazynu
+                    baselinkerService.fetchInventories()
+                    
                     // Rozpocznij monitorowanie nowych zamówień
                     notificationService.startMonitoringForNewOrders(baselinkerService: baselinkerService)
                 }

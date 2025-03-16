@@ -637,31 +637,71 @@ class BaselinkerService: ObservableObject {
     }
     
     func getTopSellingProducts(limit: Int = 5) -> [(name: String, quantity: Int, id: String, imageUrl: String?)] {
-        var productQuantities: [String: (quantity: Int, id: String, imageUrl: String?)] = [:]
+        var productQuantities: [String: (quantity: Int, id: String, sku: String, imageUrl: String?)] = [:]
         
         // Zliczanie ilości sprzedanych produktów
         for order in orders {
             for item in order.items {
                 let productId = item.id
                 let productName = item.name
+                let productSku = item.sku
                 let imageUrl = item.imageUrl
                 
                 if let existingProduct = productQuantities[productName] {
                     // Aktualizujemy ilość dla istniejącego produktu
                     // Preferujemy rzeczywisty URL obrazka, jeśli jest dostępny
                     let updatedImageUrl = imageUrl?.hasPrefix("http") == true ? imageUrl : existingProduct.imageUrl
-                    productQuantities[productName] = (quantity: existingProduct.quantity + item.quantity, id: existingProduct.id, imageUrl: updatedImageUrl)
+                    productQuantities[productName] = (quantity: existingProduct.quantity + item.quantity, id: existingProduct.id, sku: existingProduct.sku, imageUrl: updatedImageUrl)
                 } else {
                     // Dodajemy nowy produkt
-                    productQuantities[productName] = (quantity: item.quantity, id: productId, imageUrl: imageUrl)
+                    productQuantities[productName] = (quantity: item.quantity, id: productId, sku: productSku, imageUrl: imageUrl)
                 }
             }
         }
         
+        print("🔍 Znaleziono \(productQuantities.count) produktów w zamówieniach")
+        print("📊 Liczba produktów w magazynie: \(inventoryProducts.count)")
+        
+        // Próbujemy znaleźć odpowiadające produkty w magazynie, aby użyć ich obrazków
+        for (productName, productData) in productQuantities {
+            print("🔎 Szukam produktu '\(productName)' w magazynie (SKU: \(productData.sku), ID: \(productData.id))")
+            
+            // Szukamy produktu w magazynie po SKU
+            if let inventoryProduct = inventoryProducts.first(where: { $0.sku == productData.sku && $0.sku.isEmpty == false }) {
+                // Jeśli znaleziono produkt w magazynie i ma URL obrazka, używamy go
+                if let inventoryImageUrl = inventoryProduct.imageUrl, !inventoryImageUrl.isEmpty {
+                    print("✅ Znaleziono produkt w magazynie po SKU. URL obrazka: \(inventoryImageUrl)")
+                    productQuantities[productName] = (quantity: productData.quantity, id: productData.id, sku: productData.sku, imageUrl: inventoryImageUrl)
+                } else {
+                    print("⚠️ Znaleziono produkt w magazynie po SKU, ale brak URL obrazka")
+                }
+            }
+            // Jeśli nie znaleziono po SKU, próbujemy po ID
+            else if let inventoryProduct = inventoryProducts.first(where: { $0.id == productData.id }) {
+                // Jeśli znaleziono produkt w magazynie i ma URL obrazka, używamy go
+                if let inventoryImageUrl = inventoryProduct.imageUrl, !inventoryImageUrl.isEmpty {
+                    print("✅ Znaleziono produkt w magazynie po ID. URL obrazka: \(inventoryImageUrl)")
+                    productQuantities[productName] = (quantity: productData.quantity, id: productData.id, sku: productData.sku, imageUrl: inventoryImageUrl)
+                } else {
+                    print("⚠️ Znaleziono produkt w magazynie po ID, ale brak URL obrazka")
+                }
+            } else {
+                print("❌ Nie znaleziono produktu w magazynie")
+            }
+        }
+        
         // Sortowanie i ograniczenie do limitu
-        return productQuantities.sorted { $0.value.quantity > $1.value.quantity }
+        let result = productQuantities.sorted { $0.value.quantity > $1.value.quantity }
             .prefix(limit)
             .map { (name: $0.key, quantity: $0.value.quantity, id: $0.value.id, imageUrl: $0.value.imageUrl) }
+        
+        // Wyświetlamy informacje o wynikowych produktach
+        print("📋 Najlepiej sprzedające się produkty:")
+        for (index, product) in result.enumerated() {
+            print("\(index + 1). \(product.name) (\(product.quantity) szt.) - URL obrazka: \(product.imageUrl ?? "brak")")
+        }
+        
+        return result
     }
     
     func getSalesDataForLastWeek() -> [(day: String, value: Double, date: Date)] {
@@ -708,8 +748,11 @@ class BaselinkerService: ObservableObject {
         
         // Jeśli nie ma żadnych zamówień z ostatnich 24 godzin, generujemy dane testowe
         if todayOrders.isEmpty && orders.isEmpty {
+            print("📊 Brak zamówień z ostatnich 24h - generuję dane testowe")
             return generateTestData()
         }
+        
+        print("📊 Znaleziono \(todayOrders.count) zamówień z ostatnich 24h")
         
         // Liczba zamówień z ostatnich 24 godzin
         let orderCount = todayOrders.count
@@ -721,29 +764,67 @@ class BaselinkerService: ObservableObject {
         let newOrdersCount = todayOrders.filter { $0.status == OrderStatus.new.rawValue }.count
         
         // Najlepiej sprzedające się produkty z ostatnich 24 godzin
-        var productQuantities: [String: (quantity: Int, id: String, imageUrl: String?)] = [:]
+        var productQuantities: [String: (quantity: Int, id: String, sku: String, imageUrl: String?)] = [:]
         
         for order in todayOrders {
             for item in order.items {
                 let productId = item.id
                 let productName = item.name
+                let productSku = item.sku
                 let imageUrl = item.imageUrl
                 
                 if let existingProduct = productQuantities[productName] {
                     // Aktualizujemy ilość dla istniejącego produktu
                     // Preferujemy rzeczywisty URL obrazka, jeśli jest dostępny
                     let updatedImageUrl = imageUrl?.hasPrefix("http") == true ? imageUrl : existingProduct.imageUrl
-                    productQuantities[productName] = (quantity: existingProduct.quantity + item.quantity, id: existingProduct.id, imageUrl: updatedImageUrl)
+                    productQuantities[productName] = (quantity: existingProduct.quantity + item.quantity, id: existingProduct.id, sku: existingProduct.sku, imageUrl: updatedImageUrl)
                 } else {
                     // Dodajemy nowy produkt
-                    productQuantities[productName] = (quantity: item.quantity, id: productId, imageUrl: imageUrl)
+                    productQuantities[productName] = (quantity: item.quantity, id: productId, sku: productSku, imageUrl: imageUrl)
                 }
+            }
+        }
+        
+        print("🔍 Znaleziono \(productQuantities.count) produktów w zamówieniach z ostatnich 24h")
+        print("📊 Liczba produktów w magazynie: \(inventoryProducts.count)")
+        
+        // Próbujemy znaleźć odpowiadające produkty w magazynie, aby użyć ich obrazków
+        for (productName, productData) in productQuantities {
+            print("🔎 Szukam produktu '\(productName)' w magazynie (SKU: \(productData.sku), ID: \(productData.id))")
+            
+            // Szukamy produktu w magazynie po SKU
+            if let inventoryProduct = inventoryProducts.first(where: { $0.sku == productData.sku && $0.sku.isEmpty == false }) {
+                // Jeśli znaleziono produkt w magazynie i ma URL obrazka, używamy go
+                if let inventoryImageUrl = inventoryProduct.imageUrl, !inventoryImageUrl.isEmpty {
+                    print("✅ Znaleziono produkt w magazynie po SKU. URL obrazka: \(inventoryImageUrl)")
+                    productQuantities[productName] = (quantity: productData.quantity, id: productData.id, sku: productData.sku, imageUrl: inventoryImageUrl)
+                } else {
+                    print("⚠️ Znaleziono produkt w magazynie po SKU, ale brak URL obrazka")
+                }
+            }
+            // Jeśli nie znaleziono po SKU, próbujemy po ID
+            else if let inventoryProduct = inventoryProducts.first(where: { $0.id == productData.id }) {
+                // Jeśli znaleziono produkt w magazynie i ma URL obrazka, używamy go
+                if let inventoryImageUrl = inventoryProduct.imageUrl, !inventoryImageUrl.isEmpty {
+                    print("✅ Znaleziono produkt w magazynie po ID. URL obrazka: \(inventoryImageUrl)")
+                    productQuantities[productName] = (quantity: productData.quantity, id: productData.id, sku: productData.sku, imageUrl: inventoryImageUrl)
+                } else {
+                    print("⚠️ Znaleziono produkt w magazynie po ID, ale brak URL obrazka")
+                }
+            } else {
+                print("❌ Nie znaleziono produktu w magazynie")
             }
         }
         
         let topProducts = productQuantities.sorted { $0.value.quantity > $1.value.quantity }
             .prefix(5)
             .map { (name: $0.key, quantity: $0.value.quantity, id: $0.value.id, imageUrl: $0.value.imageUrl) }
+        
+        // Wyświetlamy informacje o wynikowych produktach
+        print("📋 Najlepiej sprzedające się produkty z ostatnich 24h:")
+        for (index, product) in topProducts.enumerated() {
+            print("\(index + 1). \(product.name) (\(product.quantity) szt.) - URL obrazka: \(product.imageUrl ?? "brak")")
+        }
         
         return (orderCount: orderCount, totalValue: totalValue, newOrdersCount: newOrdersCount, topProducts: topProducts)
     }
@@ -756,12 +837,17 @@ class BaselinkerService: ObservableObject {
         
         // Używamy rzeczywistych adresów URL obrazków z internetu
         let topProducts: [(name: String, quantity: Int, id: String, imageUrl: String?)] = [
-            ("Smartfon XYZ", 12, "prod1", "https://placehold.co/200x200/png?text=Smartfon"),
-            ("Słuchawki bezprzewodowe", 8, "prod2", "https://placehold.co/200x200/png?text=Słuchawki"),
-            ("Powerbank 10000mAh", 6, "prod3", "https://placehold.co/200x200/png?text=Powerbank"),
-            ("Etui ochronne", 5, "prod4", "https://placehold.co/200x200/png?text=Etui"),
-            ("Ładowarka USB-C", 4, "prod5", "https://placehold.co/200x200/png?text=Ładowarka")
+            ("Smartfon XYZ", 12, "prod1", "https://cdn.pixabay.com/photo/2016/11/29/12/30/phone-1869510_1280.jpg"),
+            ("Słuchawki bezprzewodowe", 8, "prod2", "https://cdn.pixabay.com/photo/2018/09/17/14/27/headphones-3683983_1280.jpg"),
+            ("Powerbank 10000mAh", 6, "prod3", "https://cdn.pixabay.com/photo/2014/08/05/10/30/iphone-410324_1280.jpg"),
+            ("Etui ochronne", 5, "prod4", "https://cdn.pixabay.com/photo/2015/02/02/15/28/office-620822_1280.jpg"),
+            ("Ładowarka USB-C", 4, "prod5", "https://cdn.pixabay.com/photo/2014/04/05/11/38/cable-316288_1280.jpg")
         ]
+        
+        print("📊 Wygenerowano testowe dane z rzeczywistymi URL-ami obrazków")
+        for (index, product) in topProducts.enumerated() {
+            print("\(index + 1). \(product.name) (\(product.quantity) szt.) - URL obrazka: \(product.imageUrl ?? "brak")")
+        }
         
         return (orderCount, totalValue, newOrdersCount, topProducts)
     }

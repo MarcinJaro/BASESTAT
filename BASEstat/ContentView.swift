@@ -45,20 +45,14 @@ struct ContentView: View {
                 Label("Produkty", systemImage: "cube.box")
             }
             .tag(2)
-            
-            // Zakładka Ustawienia
-            NavigationView {
-                SettingsView(baselinkerService: baselinkerService)
-            }
-            .tabItem {
-                Label("Ustawienia", systemImage: "gear")
-            }
-            .tag(3)
         }
         .onChange(of: baselinkerService.connectionStatus) { newStatus in
             if case .failed(let message) = newStatus {
                 showingConnectionAlert = true
             }
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(baselinkerService: baselinkerService)
         }
         .alert(isPresented: $showingConnectionAlert) {
             if case .failed(let message) = baselinkerService.connectionStatus {
@@ -92,6 +86,7 @@ class TabSelection: ObservableObject {
 
 struct DashboardView: View {
     @ObservedObject var baselinkerService: BaselinkerService
+    @State private var showingSettings = false
     
     var body: some View {
         Group {
@@ -202,6 +197,12 @@ struct DashboardView: View {
                                 VStack(spacing: 0) {
                                     ForEach(baselinkerService.getTopSellingProducts(limit: 5), id: \.id) { product in
                                         HStack {
+                                            // Obrazek produktu
+                                            ProductImageView(imageUrl: product.imageUrl)
+                                                .frame(width: 40, height: 40)
+                                                .cornerRadius(6)
+                                                .padding(.trailing, 8)
+                                                
                                             Text(product.name)
                                                 .lineLimit(1)
                                             Spacer()
@@ -231,6 +232,12 @@ struct DashboardView: View {
         }
         .navigationTitle("Dashboard")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            // Upewniamy się, że mamy dane produktów z magazynu
+            if baselinkerService.inventoryProducts.isEmpty {
+                baselinkerService.fetchInventories()
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: {
@@ -245,6 +252,17 @@ struct DashboardView: View {
                 }
                 .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
             }
+            
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: {
+                    showingSettings = true
+                }) {
+                    Image(systemName: "gear")
+                }
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(baselinkerService: baselinkerService)
         }
     }
 }
@@ -327,6 +345,7 @@ struct OrdersView: View {
     @ObservedObject var baselinkerService: BaselinkerService
     @State private var searchText = ""
     @State private var selectedStatusFilter: String? = nil
+    @State private var showingSettings = false
     
     var filteredOrders: [Order] {
         var filtered = baselinkerService.orders
@@ -461,6 +480,17 @@ struct OrdersView: View {
                 }
                 .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
             }
+            
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: {
+                    showingSettings = true
+                }) {
+                    Image(systemName: "gear")
+                }
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(baselinkerService: baselinkerService)
         }
     }
 }
@@ -675,6 +705,7 @@ struct OrderDetailView: View {
 struct TodaySummaryView: View {
     @EnvironmentObject private var baselinkerService: BaselinkerService
     @EnvironmentObject private var tabSelection: TabSelection
+    @State private var showingSettings = false
     
     var body: some View {
         NavigationView {
@@ -705,7 +736,18 @@ struct TodaySummaryView: View {
                     }
                     .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
                 }
+                
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        showingSettings = true
+                    }) {
+                        Image(systemName: "gear")
+                    }
+                }
             }
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(baselinkerService: baselinkerService)
         }
     }
 }
@@ -914,11 +956,16 @@ struct ProductImageView: View {
                             .frame(width: 40, height: 40)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     case .failure:
-                        Image(systemName: "photo")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 40, height: 40)
-                            .foregroundColor(.gray)
+                        // Wyświetlamy placeholder w przypadku błędu ładowania obrazka
+                        VStack {
+                            Image(systemName: "photo")
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 30, height: 30)
+                                .foregroundColor(.gray)
+                        }
+                        .frame(width: 40, height: 40)
+                        .background(Color.gray.opacity(0.1))
                     @unknown default:
                         Image(systemName: "photo")
                             .resizable()
@@ -930,15 +977,21 @@ struct ProductImageView: View {
                 .frame(width: 40, height: 40)
                 .background(Color.gray.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .onAppear {
+                    print("🖼️ Ładowanie obrazka z URL: \(imageUrl)")
+                }
             } else {
-                // Jeśli to nazwa obrazu systemowego, używamy Image(systemName:)
-                Image(systemName: imageUrl)
+                // Jeśli to nazwa obrazu systemowego lub nieprawidłowy URL
+                Image(systemName: "photo")
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: 40, height: 40)
-                    .foregroundColor(.blue)
+                    .foregroundColor(.gray)
                     .background(Color.gray.opacity(0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .onAppear {
+                        print("⚠️ Nieprawidłowy URL obrazka: \(imageUrl)")
+                    }
             }
         } else {
             // Domyślny obraz, gdy nie ma URL
@@ -949,6 +1002,9 @@ struct ProductImageView: View {
                 .foregroundColor(.gray)
                 .background(Color.gray.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .onAppear {
+                    print("❌ Brak URL obrazka")
+                }
         }
     }
 }
@@ -1293,6 +1349,7 @@ struct InventoryProductsView: View {
     @ObservedObject var baselinkerService: BaselinkerService
     @State private var searchText = ""
     @State private var showLowStockOnly = false
+    @State private var showingSettings = false
     
     var filteredProducts: [InventoryProduct] {
         var result = baselinkerService.inventoryProducts
@@ -1465,6 +1522,18 @@ struct InventoryProductsView: View {
             if baselinkerService.inventories.isEmpty {
                 baselinkerService.fetchInventories()
             }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: {
+                    showingSettings = true
+                }) {
+                    Image(systemName: "gear")
+                }
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(baselinkerService: baselinkerService)
         }
     }
 }
