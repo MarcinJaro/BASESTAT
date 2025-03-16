@@ -1139,6 +1139,9 @@ struct NotificationRow: View {
 struct SettingsView: View {
     @State private var apiToken = ""
     @State private var notificationsEnabled = true
+    @State private var newOrdersNotificationsEnabled = true
+    @State private var statusChangeNotificationsEnabled = true
+    @State private var lowStockNotificationsEnabled = true
     @State private var darkModeEnabled = false
     @State private var syncInterval = 15.0
     @State private var isTestingConnection = false
@@ -1146,6 +1149,20 @@ struct SettingsView: View {
     @State private var connectionAlertMessage = ""
     @State private var showDebugInfo = false
     @ObservedObject var baselinkerService: BaselinkerService
+    @EnvironmentObject private var notificationService: NotificationService
+    
+    init(baselinkerService: BaselinkerService) {
+        self.baselinkerService = baselinkerService
+        
+        // Wczytaj zapisane ustawienia z UserDefaults
+        _apiToken = State(initialValue: UserDefaults.standard.string(forKey: "baselinkerApiToken") ?? "")
+        _notificationsEnabled = State(initialValue: UserDefaults.standard.bool(forKey: "notificationsEnabled"))
+        _newOrdersNotificationsEnabled = State(initialValue: UserDefaults.standard.bool(forKey: "newOrdersNotificationsEnabled"))
+        _statusChangeNotificationsEnabled = State(initialValue: UserDefaults.standard.bool(forKey: "statusChangeNotificationsEnabled"))
+        _lowStockNotificationsEnabled = State(initialValue: UserDefaults.standard.bool(forKey: "lowStockNotificationsEnabled"))
+        _darkModeEnabled = State(initialValue: UserDefaults.standard.bool(forKey: "darkModeEnabled"))
+        _syncInterval = State(initialValue: UserDefaults.standard.double(forKey: "syncInterval") != 0 ? UserDefaults.standard.double(forKey: "syncInterval") : 15.0)
+    }
     
     var body: some View {
         NavigationView {
@@ -1197,11 +1214,23 @@ struct SettingsView: View {
                 
                 Section(header: Text("Powiadomienia")) {
                     Toggle("Włącz powiadomienia", isOn: $notificationsEnabled)
+                        .onChange(of: notificationsEnabled) { oldValue, newValue in
+                            UserDefaults.standard.set(newValue, forKey: "notificationsEnabled")
+                        }
                     
                     if notificationsEnabled {
-                        Toggle("Nowe zamówienia", isOn: .constant(true))
-                        Toggle("Zmiany statusu", isOn: .constant(true))
-                        Toggle("Niski stan magazynowy", isOn: .constant(true))
+                        Toggle("Nowe zamówienia", isOn: $newOrdersNotificationsEnabled)
+                            .onChange(of: newOrdersNotificationsEnabled) { oldValue, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "newOrdersNotificationsEnabled")
+                            }
+                        Toggle("Zmiany statusu", isOn: $statusChangeNotificationsEnabled)
+                            .onChange(of: statusChangeNotificationsEnabled) { oldValue, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "statusChangeNotificationsEnabled")
+                            }
+                        Toggle("Niski stan magazynowy", isOn: $lowStockNotificationsEnabled)
+                            .onChange(of: lowStockNotificationsEnabled) { oldValue, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "lowStockNotificationsEnabled")
+                            }
                     }
                 }
                 
@@ -1229,6 +1258,9 @@ struct SettingsView: View {
                 
                 Section(header: Text("Wygląd")) {
                     Toggle("Tryb ciemny", isOn: $darkModeEnabled)
+                        .onChange(of: darkModeEnabled) { oldValue, newValue in
+                            UserDefaults.standard.set(newValue, forKey: "darkModeEnabled")
+                        }
                 }
                 
                 Section(header: Text("O aplikacji")) {
