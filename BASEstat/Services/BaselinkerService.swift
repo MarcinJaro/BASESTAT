@@ -7,8 +7,6 @@
 
 import Foundation
 import Combine
-
-// Importujemy modele
 import SwiftUI
 
 // Rozszerzenie dla Dictionary, aby konwertować do JSON string
@@ -34,6 +32,10 @@ struct InventoryProduct: Identifiable {
     var description: String?
     var category: String?
     var attributes: [String: String]
+    var lastUpdateDate: Date?
+    var isLowStock: Bool {
+        return quantity <= 5 // Definiujemy niski stan magazynowy jako 5 lub mniej sztuk
+    }
     
     init(from json: [String: Any]) {
         // Obsługa product_id jako liczby lub stringa
@@ -94,6 +96,15 @@ struct InventoryProduct: Identifiable {
         
         // Pobieranie kategorii
         self.category = json["category_id"] as? String
+        
+        // Parsowanie daty ostatniej aktualizacji
+        if let dateUpdated = json["date_updated"] as? Int {
+            self.lastUpdateDate = Date(timeIntervalSince1970: TimeInterval(dateUpdated))
+        } else if let dateUpdated = json["date_updated"] as? String, let timestamp = Int(dateUpdated) {
+            self.lastUpdateDate = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        } else {
+            self.lastUpdateDate = nil
+        }
         
         // Parsowanie atrybutów z pola text_fields.features
         var attrs: [String: String] = [:]
@@ -606,18 +617,20 @@ class BaselinkerService: ObservableObject {
     func getOrderStatistics() -> [String: Double] {
         var statistics: [String: Double] = [:]
         
-        // Całkowita wartość zamówień
+        // Wartość wszystkich zamówień
         statistics["totalValue"] = orders.reduce(0) { $0 + $1.totalAmount }
         
-        // Liczba zamówień według statusu
+        // Liczba zamówień w każdym statusie
         for status in OrderStatus.allCases {
             let count = orders.filter { $0.status == status.rawValue }.count
-            statistics["status_\(status.rawValue)_count"] = Double(count)
+            statistics["status_\(status.rawValue)"] = Double(count)
         }
         
         // Średnia wartość zamówienia
         if !orders.isEmpty {
             statistics["averageOrderValue"] = statistics["totalValue"]! / Double(orders.count)
+        } else {
+            statistics["averageOrderValue"] = 0
         }
         
         return statistics

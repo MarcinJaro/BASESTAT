@@ -1292,17 +1292,39 @@ struct ConnectionStatusView: View {
 struct InventoryProductsView: View {
     @ObservedObject var baselinkerService: BaselinkerService
     @State private var searchText = ""
+    @State private var showLowStockOnly = false
     
     var filteredProducts: [InventoryProduct] {
-        if searchText.isEmpty {
-            return baselinkerService.inventoryProducts
-        } else {
-            return baselinkerService.inventoryProducts.filter { product in
+        var result = baselinkerService.inventoryProducts
+        
+        // Filtrowanie według tekstu wyszukiwania
+        if !searchText.isEmpty {
+            result = result.filter { product in
                 product.name.lowercased().contains(searchText.lowercased()) ||
                 product.sku.lowercased().contains(searchText.lowercased()) ||
                 (product.ean ?? "").lowercased().contains(searchText.lowercased())
             }
         }
+        
+        // Filtrowanie według niskiego stanu magazynowego
+        if showLowStockOnly {
+            result = result.filter { $0.isLowStock }
+            
+            // Sortowanie według daty ostatniej aktualizacji (od najnowszych)
+            result.sort { (product1, product2) -> Bool in
+                if let date1 = product1.lastUpdateDate, let date2 = product2.lastUpdateDate {
+                    return date1 > date2
+                } else if product1.lastUpdateDate != nil {
+                    return true
+                } else if product2.lastUpdateDate != nil {
+                    return false
+                } else {
+                    return product1.name < product2.name // Jeśli brak dat, sortuj alfabetycznie
+                }
+            }
+        }
+        
+        return result
     }
     
     var body: some View {
@@ -1331,22 +1353,35 @@ struct InventoryProductsView: View {
                 .padding(.horizontal)
             }
             
-            // Pole wyszukiwania
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.gray)
-                
-                TextField("Szukaj produktów...", text: $searchText)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                
-                if !searchText.isEmpty {
-                    Button(action: {
-                        searchText = ""
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
+            // Pole wyszukiwania i przełącznik niskiego stanu
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.gray)
+                    
+                    TextField("Szukaj produktów...", text: $searchText)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    
+                    if !searchText.isEmpty {
+                        Button(action: {
+                            searchText = ""
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray)
+                        }
                     }
                 }
+                
+                // Przełącznik do filtrowania produktów z niskim stanem
+                Toggle(isOn: $showLowStockOnly) {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundColor(.orange)
+                        Text("Pokaż tylko produkty z niskim stanem magazynowym")
+                            .font(.subheadline)
+                    }
+                }
+                .toggleStyle(SwitchToggleStyle(tint: .orange))
             }
             .padding(.horizontal)
             
@@ -1381,11 +1416,19 @@ struct InventoryProductsView: View {
                     Text("Brak produktów")
                         .font(.headline)
                         .padding(.top)
-                    Text("Nie znaleziono żadnych produktów w wybranym katalogu")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
+                    if showLowStockOnly {
+                        Text("Nie znaleziono produktów z niskim stanem magazynowym")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    } else {
+                        Text("Nie znaleziono żadnych produktów w wybranym katalogu")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
                 }
                 Spacer()
             } else {
@@ -1402,6 +1445,16 @@ struct InventoryProductsView: View {
                         .font(.caption)
                         .foregroundColor(.gray)
                     Spacer()
+                    
+                    if showLowStockOnly {
+                        Text("Filtr: Niski stan magazynowy")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(4)
+                    }
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 4)
@@ -1458,9 +1511,19 @@ struct InventoryProductRow: View {
             
             // Informacje o produkcie
             VStack(alignment: .leading, spacing: 4) {
-                Text(product.name)
-                    .font(.headline)
-                    .lineLimit(2)
+                HStack {
+                    Text(product.name)
+                        .font(.headline)
+                        .lineLimit(2)
+                    
+                    if product.isLowStock {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.caption)
+                    }
+                    
+                    Spacer()
+                }
                 
                 HStack {
                     Text("SKU: \(product.sku)")
@@ -1484,17 +1547,34 @@ struct InventoryProductRow: View {
                     // Wskaźnik stanu magazynowego
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(product.quantity > 0 ? Color.green : Color.red)
+                            .fill(product.quantity > 0 ? (product.isLowStock ? Color.orange : Color.green) : Color.red)
                             .frame(width: 8, height: 8)
                         
                         Text("\(product.quantity) szt.")
                             .font(.caption)
-                            .foregroundColor(product.quantity > 0 ? .primary : .red)
+                            .foregroundColor(product.quantity > 0 ? (product.isLowStock ? .orange : .primary) : .red)
                     }
+                }
+                
+                // Dodajemy informację o dacie ostatniej aktualizacji dla produktów z niskim stanem
+                if product.isLowStock, let updateDate = product.lastUpdateDate {
+                    Text("Aktualizacja: \(formatDate(updateDate))")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
                 }
             }
         }
         .padding(.vertical, 8)
+        .background(product.isLowStock ? Color.orange.opacity(0.05) : Color.clear)
+        .cornerRadius(8)
+    }
+    
+    // Funkcja pomocnicza do formatowania daty
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 }
 
