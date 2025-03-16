@@ -26,6 +26,9 @@ struct BASEstatApp: App {
                     
                     // Rozpocznij monitorowanie nowych zamówień
                     notificationService.startMonitoringForNewOrders(baselinkerService: baselinkerService)
+                    
+                    // Uruchamiamy automatyczne odświeżanie podsumowania dziennego
+                    baselinkerService.startDailySummaryAutoRefresh()
                 }
             
             // Nowy design aplikacji - zakomentowany do czasu pełnej implementacji

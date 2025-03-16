@@ -149,8 +149,10 @@ class BaselinkerService: ObservableObject {
     @Published var isLoadingProducts: Bool = false
     @Published var selectedInventoryId: String? = nil
     @Published var loadingProgress: Double = 0.0
+    @Published var dailySummary: DailySummary?
     
     private var cancellables = Set<AnyCancellable>()
+    private var summaryTimer: Timer?
     
     enum ConnectionStatus: Equatable {
         case notConnected
@@ -224,16 +226,19 @@ class BaselinkerService: ObservableObject {
         self.apiToken = token
         
         // Po zapisaniu tokenu, przetestuj połączenie
-        testConnection { success, message in
+        testConnection { [weak self] success, message in
+            guard let self = self else { return }
             // Aktualizujemy status połączenia na podstawie wyniku
-            if success {
-                self.connectionStatus = .connected
-                // Po udanym połączeniu, pobierz zamówienia
-                self.fetchOrders()
-                // Pobierz również listę magazynów
-                self.fetchInventories()
-            } else {
-                self.connectionStatus = .failed(message)
+            DispatchQueue.main.async {
+                if success {
+                    self.connectionStatus = .connected
+                    // Po udanym połączeniu, pobierz zamówienia
+                    self.fetchOrders()
+                    // Pobierz również listę magazynów
+                    self.fetchInventories()
+                } else {
+                    self.connectionStatus = .failed(message)
+                }
             }
         }
     }
@@ -331,11 +336,13 @@ class BaselinkerService: ObservableObject {
     }
     
     func fetchOrders(dateFrom: Date? = nil, dateTo: Date? = nil, statusId: String? = nil) {
-        isLoading = true
-        error = nil
-        
-        // Resetujemy listę zamówień przed pobraniem nowych
-        orders = []
+        DispatchQueue.main.async {
+            self.isLoading = true
+            self.error = nil
+            
+            // Resetujemy listę zamówień przed pobraniem nowych
+            self.orders = []
+        }
         
         // Pobieramy pierwszą partię zamówień
         fetchOrdersBatch(dateFrom: dateFrom, dateTo: dateTo, statusId: statusId, idFrom: nil)
@@ -345,15 +352,19 @@ class BaselinkerService: ObservableObject {
         // Tworzymy zagnieżdżony słownik parametrów
         var orderParameters: [String: Any] = [
             "get_unconfirmed_orders": false, // Pobieramy tylko potwierdzone zamówienia
-            "include_custom_extra_fields": true
         ]
         
+        // Dodajemy opcjonalne parametry, jeśli zostały podane
         if let dateFrom = dateFrom {
-            orderParameters["date_from"] = Int(dateFrom.timeIntervalSince1970)
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            orderParameters["date_from"] = dateFormatter.string(from: dateFrom)
         }
         
         if let dateTo = dateTo {
-            orderParameters["date_to"] = Int(dateTo.timeIntervalSince1970)
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            orderParameters["date_to"] = dateFormatter.string(from: dateTo)
         }
         
         if let statusId = statusId {
@@ -370,14 +381,18 @@ class BaselinkerService: ObservableObject {
         // Konwertujemy parametry do formatu JSON
         guard let parametersData = try? JSONSerialization.data(withJSONObject: orderParameters),
               let parametersString = String(data: parametersData, encoding: .utf8) else {
-            self.error = "Błąd serializacji parametrów"
-            self.isLoading = false
+            DispatchQueue.main.async {
+                self.error = "Błąd serializacji parametrów"
+                self.isLoading = false
+            }
             return
         }
         
         guard let url = URL(string: baseURL) else {
-            self.error = "Nieprawidłowy URL"
-            self.isLoading = false
+            DispatchQueue.main.async {
+                self.error = "Nieprawidłowy URL"
+                self.isLoading = false
+            }
             return
         }
         
@@ -433,10 +448,12 @@ class BaselinkerService: ObservableObject {
                             let ordersData = try JSONSerialization.data(withJSONObject: ordersArray)
                             let newOrders = try decoder.decode([Order].self, from: ordersData)
                             
-                            // Dodajemy nowe zamówienia do istniejącej listy
-                            self?.orders.append(contentsOf: newOrders)
-                            self?.connectionStatus = .connected
-                            self?.error = nil
+                            // Dodajemy nowe zamówienia do istniejącej listy na głównym wątku
+                            DispatchQueue.main.async {
+                                self?.orders.append(contentsOf: newOrders)
+                                self?.connectionStatus = .connected
+                                self?.error = nil
+                            }
                             
                             // Sprawdzamy, czy otrzymaliśmy maksymalną liczbę zamówień (100)
                             // Jeśli tak, to pobieramy kolejną partię
@@ -861,7 +878,9 @@ class BaselinkerService: ObservableObject {
             return
         }
         
-        isLoadingProducts = true
+        DispatchQueue.main.async {
+            self.isLoadingProducts = true
+        }
         
         let parameters: [String: Any] = [
             "method": "getInventories",
@@ -1105,10 +1124,10 @@ class BaselinkerService: ObservableObject {
         print("📦 Podzielono produkty na \(batches.count) partii po maksymalnie \(batchSize) produktów")
         
         // Resetujemy listę produktów przed pobraniem nowych
-        self.inventoryProducts = []
-        
-        // Pokazujemy informację o postępie
         DispatchQueue.main.async {
+            self.inventoryProducts = []
+            
+            // Pokazujemy informację o postępie
             self.loadingProgress = 0.0
         }
         
@@ -1245,5 +1264,30 @@ class BaselinkerService: ObservableObject {
                 }
             }
         }
+    }
+    
+    // Funkcja do obliczania dziennego podsumowania
+    func calculateDailySummary() {
+        dailySummary = DailySummary(orders: orders, products: inventoryProducts)
+    }
+    
+    // Funkcja do uruchomienia automatycznego odświeżania podsumowania dziennego
+    func startDailySummaryAutoRefresh() {
+        // Zatrzymaj istniejący timer, jeśli istnieje
+        summaryTimer?.invalidate()
+        
+        // Oblicz podsumowanie od razu
+        calculateDailySummary()
+        
+        // Ustaw timer na odświeżanie co 60 sekund
+        summaryTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.calculateDailySummary()
+        }
+    }
+    
+    // Zatrzymaj automatyczne odświeżanie
+    func stopDailySummaryAutoRefresh() {
+        summaryTimer?.invalidate()
+        summaryTimer = nil
     }
 } 

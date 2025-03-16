@@ -12,71 +12,100 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var showingSettings = false
     @State private var showingConnectionAlert = false
+    @StateObject private var tabSelection: TabSelection
     
     init(baselinkerService: BaselinkerService) {
         self.baselinkerService = baselinkerService
+        // Inicjalizacja StateObject musi być w init
+        let initialBinding = Binding<Int>(
+            get: { 0 },
+            set: { _ in }
+        )
+        _tabSelection = StateObject(wrappedValue: TabSelection(selection: initialBinding))
     }
     
     var body: some View {
-        TabView(selection: $selectedTab) {
-            // Zakładka Dashboard
-            NavigationView {
-                DashboardView(baselinkerService: baselinkerService)
-            }
-            .tabItem {
-                Label("Dashboard", systemImage: "chart.bar")
-            }
-            .tag(0)
+        VStack(spacing: 0) {
+            let tabSelectionBinding = Binding<Int>(
+                get: { self.selectedTab },
+                set: { self.selectedTab = $0 }
+            )
             
-            // Zakładka Zamówienia
-            NavigationView {
-                OrdersView(baselinkerService: baselinkerService)
+            TabView(selection: $selectedTab) {
+                // Zakładka Dashboard
+                NavigationView {
+                    DashboardView(baselinkerService: baselinkerService)
+                }
+                .tabItem {
+                    Label("Dashboard", systemImage: "chart.bar")
+                }
+                .tag(0)
+                
+                // Zakładka Zamówienia
+                NavigationView {
+                    OrdersView(baselinkerService: baselinkerService)
+                }
+                .tabItem {
+                    Label("Zamówienia", systemImage: "cart")
+                }
+                .tag(1)
+                
+                // Nowa zakładka Produkty
+                NavigationView {
+                    InventoryProductsView(baselinkerService: baselinkerService)
+                }
+                .tabItem {
+                    Label("Produkty", systemImage: "cube.box")
+                }
+                .tag(2)
+                
+                // Nowa zakładka Podsumowanie Dzienne
+                NavigationView {
+                    TodaySummaryView()
+                }
+                .tabItem {
+                    Label("Podsumowanie", systemImage: "clock")
+                }
+                .tag(3)
             }
-            .tabItem {
-                Label("Zamówienia", systemImage: "cart")
+            .onChange(of: selectedTab) { newValue in
+                tabSelection.selection = newValue
             }
-            .tag(1)
+            .environmentObject(tabSelection)
             
-            // Nowa zakładka Produkty
-            NavigationView {
-                InventoryProductsView(baselinkerService: baselinkerService)
+            // Obserwujemy zmiany statusu połączenia
+            .onChange(of: baselinkerService.connectionStatus) { newStatus in
+                if case .failed(let message) = newStatus {
+                    showingConnectionAlert = true
+                }
             }
-            .tabItem {
-                Label("Produkty", systemImage: "cube.box")
+            .sheet(isPresented: $showingSettings) {
+                SettingsView(baselinkerService: baselinkerService)
             }
-            .tag(2)
-        }
-        .onChange(of: baselinkerService.connectionStatus) { newStatus in
-            if case .failed(let message) = newStatus {
-                showingConnectionAlert = true
-            }
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(baselinkerService: baselinkerService)
-        }
-        .alert(isPresented: $showingConnectionAlert) {
-            if case .failed(let message) = baselinkerService.connectionStatus {
-                return Alert(
-                    title: Text("Błąd połączenia"),
-                    message: Text(message),
-                    dismissButton: .default(Text("OK"))
-                )
-            } else {
-                return Alert(
-                    title: Text("Błąd"),
-                    message: Text("Wystąpił nieznany błąd"),
-                    dismissButton: .default(Text("OK"))
-                )
+            .alert(isPresented: $showingConnectionAlert) {
+                if case .failed(let message) = baselinkerService.connectionStatus {
+                    return Alert(
+                        title: Text("Błąd połączenia"),
+                        message: Text(message),
+                        dismissButton: .default(Text("OK"))
+                    )
+                } else {
+                    return Alert(
+                        title: Text("Błąd"),
+                        message: Text("Wystąpił nieznany błąd"),
+                        dismissButton: .default(Text("OK"))
+                    )
+                }
             }
         }
     }
 }
 
 class TabSelection: ObservableObject {
-    @Binding var selection: Int
+    @Published var selection: Int
     
     init(selection: Binding<Int>) {
-        self._selection = selection
+        self.selection = selection.wrappedValue
     }
     
     func switchToSettings() {
@@ -171,16 +200,6 @@ struct DashboardView: View {
                             }
                         }
                         .padding(.horizontal)
-                        
-                        // Wykres sprzedaży (dynamiczny)
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Sprzedaż w ostatnim tygodniu")
-                                .font(.headline)
-                                .padding(.horizontal)
-                            
-                            DynamicSalesChartView(orders: baselinkerService.orders, baselinkerService: baselinkerService)
-                                .frame(height: 200)
-                        }
                         
                         // Najlepiej sprzedające się produkty
                         VStack(alignment: .leading, spacing: 8) {
@@ -292,52 +311,6 @@ struct StatCard: View {
         .background(Color(.systemBackground))
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
-    }
-}
-
-// Dynamiczny wykres sprzedaży
-struct DynamicSalesChartView: View {
-    var orders: [Order]
-    @ObservedObject var baselinkerService: BaselinkerService
-    
-    var body: some View {
-        let salesData = baselinkerService.getSalesDataForLastWeek()
-        let maxValue = salesData.map { $0.value }.max() ?? 100.0
-        
-        VStack {
-            if salesData.allSatisfy({ $0.value == 0 }) {
-                Text("Brak danych sprzedażowych w ostatnim tygodniu")
-                    .foregroundColor(.gray)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else {
-                HStack(alignment: .bottom, spacing: 12) {
-                    ForEach(0..<salesData.count, id: \.self) { index in
-                        VStack {
-                            // Normalizujemy wysokość słupka względem maksymalnej wartości
-                            let height = salesData[index].value > 0 ? max(20, CGFloat(salesData[index].value / maxValue * 150)) : 5
-                            
-                            Text(String(format: "%.0f zł", salesData[index].value))
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                            
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(Color.blue)
-                                .frame(width: 30, height: height)
-                            
-                            Text(salesData[index].day)
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top)
-            }
-        }
-        .background(Color(.systemBackground))
-        .cornerRadius(10)
-        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
     }
 }
 
