@@ -26,11 +26,6 @@ struct ContentView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            let tabSelectionBinding = Binding<Int>(
-                get: { self.selectedTab },
-                set: { self.selectedTab = $0 }
-            )
-            
             TabView(selection: $selectedTab) {
                 // Zakładka Dashboard
                 NavigationView {
@@ -64,18 +59,18 @@ struct ContentView: View {
                     TodaySummaryView()
                 }
                 .tabItem {
-                    Label("Podsumowanie", systemImage: "clock")
+                    Label("Dziś", systemImage: "clock")
                 }
                 .tag(3)
             }
-            .onChange(of: selectedTab) { newValue in
+            .onChange(of: selectedTab) { oldValue, newValue in
                 tabSelection.selection = newValue
             }
             .environmentObject(tabSelection)
             
             // Obserwujemy zmiany statusu połączenia
-            .onChange(of: baselinkerService.connectionStatus) { newStatus in
-                if case .failed(let message) = newStatus {
+            .onChange(of: baselinkerService.connectionStatus) { oldValue, newValue in
+                if case .failed(_) = newValue {
                     showingConnectionAlert = true
                 }
             }
@@ -681,41 +676,39 @@ struct TodaySummaryView: View {
     @State private var showingSettings = false
     
     var body: some View {
-        NavigationView {
-            Group {
-                if baselinkerService.isLoading {
-                    LoadingView()
-                } else if let error = baselinkerService.error {
-                    ErrorView(error: error, retryAction: { baselinkerService.fetchOrders() })
-                } else if !baselinkerService.connectionStatus.isConnected {
-                    ConnectionErrorView(action: { tabSelection.switchToSettings() })
-                } else {
-                    TodaySummaryContent(todaySummary: baselinkerService.getTodaySummary(), salesData: baselinkerService.getSalesDataForLastWeek())
-                }
+        Group {
+            if baselinkerService.isLoading {
+                LoadingView()
+            } else if let error = baselinkerService.error {
+                ErrorView(error: error, retryAction: { baselinkerService.fetchOrders() })
+            } else if !baselinkerService.connectionStatus.isConnected {
+                ConnectionErrorView(action: { tabSelection.switchToSettings() })
+            } else {
+                TodaySummaryContent(todaySummary: baselinkerService.getTodaySummary(), salesData: baselinkerService.getSalesDataForLastWeek())
             }
-            .navigationTitle("Ostatnie 24h")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        baselinkerService.fetchOrders()
-                    }) {
-                        if baselinkerService.isLoading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                        }
+        }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    baselinkerService.fetchOrders()
+                }) {
+                    if baselinkerService.isLoading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                    } else {
+                        Image(systemName: "arrow.clockwise")
                     }
-                    .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
                 }
-                
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        showingSettings = true
-                    }) {
-                        Image(systemName: "gear")
-                    }
+                .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
+            }
+            
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: {
+                    showingSettings = true
+                }) {
+                    Image(systemName: "gear")
                 }
             }
         }
@@ -1250,7 +1243,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Ustawienia")
-            .onChange(of: baselinkerService.connectionStatus) { newStatus in
+            .onChange(of: baselinkerService.connectionStatus) { oldValue, newStatus in
                 if isTestingConnection {
                     isTestingConnection = false
                     
