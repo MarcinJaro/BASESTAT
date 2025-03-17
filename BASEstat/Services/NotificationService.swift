@@ -102,13 +102,8 @@ class NotificationService: ObservableObject {
         content.title = notification.title
         content.body = notification.message
         
-        // Użyj dźwięku kasy fiskalnej dla powiadomień o nowych zamówieniach
-        if notification.type == .newOrder {
-            // Użyj pliku dźwiękowego kasy fiskalnej
-            content.sound = UNNotificationSound(named: UNNotificationSoundName("cash_register.wav"))
-        } else {
-            content.sound = UNNotificationSound.default
-        }
+        // Użyj dźwięku kasy fiskalnej dla wszystkich typów powiadomień
+        content.sound = UNNotificationSound(named: UNNotificationSoundName("cash_register.wav"))
         
         // Dodaj identyfikator zamówienia i inne informacje jako dane użytkownika
         var userInfo: [String: Any] = [:]

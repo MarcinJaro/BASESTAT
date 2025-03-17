@@ -8,11 +8,14 @@
 import SwiftUI
 import UserNotifications
 
+// Globalna zmienna dla NotificationService, aby była dostępna dla całej aplikacji
+var globalNotificationService: NotificationService?
+
 @main
 struct BASEstatApp: App {
     @StateObject private var baselinkerService = BaselinkerService()
     @StateObject private var notificationService = NotificationService()
-    @UIApplicationDelegateAdaptor private var appDelegate: AppDelegate
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
         WindowGroup {
@@ -23,6 +26,11 @@ struct BASEstatApp: App {
                     // Przypisz serwis powiadomień do AppDelegate
                     appDelegate.notificationService = notificationService
                     
+                    // Przypisz serwis powiadomień do globalnej zmiennej
+                    globalNotificationService = notificationService
+                    
+                    print("🔄 onAppear: Przypisano notificationService do appDelegate i zmiennej globalnej")
+                    
                     // Pobierz dane przy starcie aplikacji
                     baselinkerService.fetchOrders()
                     
@@ -30,7 +38,7 @@ struct BASEstatApp: App {
                     baselinkerService.fetchInventories()
                     
                     /* 
-                    // Test powiadomień - zakomentowane, aby wyłączyć automatyczne testy powiadomień
+                    // Test powiadomień
                     print("🔔 Uruchamiam test powiadomień...")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         print("⏰ Czas na test powiadomień...")
@@ -77,9 +85,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         
         // Poproś o pozwolenie na powiadomienia przy starcie
         requestNotificationPermissions()
-        
-        // Inicjalizacja serwisu powiadomień
-        self.notificationService = NotificationService()
+
+        // Dodajemy diagnostyczny log
+        print("🚀 AppDelegate: didFinishLaunchingWithOptions zakończone")
         
         return true
     }

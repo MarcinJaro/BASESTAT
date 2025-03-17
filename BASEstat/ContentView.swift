@@ -140,7 +140,7 @@ struct ContentView: View {
         content.title = "Test powiadomienia ContentView"
         content.subtitle = "⚠️ BARDZO WAŻNE"
         content.body = "🚨 Bezpośredni test powiadomienia z ContentView"
-        content.sound = UNNotificationSound.defaultCritical
+        content.sound = UNNotificationSound(named: UNNotificationSoundName("cash_register.wav"))
         
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.5, repeats: false)
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)

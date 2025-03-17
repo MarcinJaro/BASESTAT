@@ -541,9 +541,12 @@ class BaselinkerService: ObservableObject {
                         for order in newOrders {
                             // Sprawdzamy, czy mamy dostęp do notificationService
                             #if os(iOS)
+                            print("🔍 Próbuję uzyskać dostęp do notificationService dla zamówienia #\(order.id)")
                             if let notificationService = self.getNotificationService() {
                                 // Tworzymy treść powiadomienia
                                 let message = "Nowe zamówienie #\(order.id) - \(String(format: "%.2f", order.totalAmount)) zł\nDzisiaj: \(summary.orderCount) zamówień, \(String(format: "%.2f", summary.totalValue)) zł"
+                                
+                                print("📝 Tworzę powiadomienie dla zamówienia #\(order.id)")
                                 
                                 // Tworzymy powiadomienie
                                 let notification = Notification(
@@ -1448,6 +1451,8 @@ class BaselinkerService: ObservableObject {
         // Zatrzymaj istniejący timer, jeśli istnieje
         deltaUpdateTimer?.invalidate()
         
+        print("🔄 Inicjalizacja automatycznego odświeżania zamówień (delta update)")
+        
         // Pobierz nowe zamówienia od razu
         deltaUpdateOrders()
         
@@ -1455,8 +1460,11 @@ class BaselinkerService: ObservableObject {
         let syncInterval = UserDefaults.standard.double(forKey: "syncIntervalInSeconds")
         let interval = syncInterval > 0 ? syncInterval : 30.0
         
+        print("⏱️ Ustawiam timer delta update co \(interval) sekund")
+        
         // Ustaw timer na odświeżanie z określoną częstotliwością
         deltaUpdateTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            print("⏰ Timer delta update - uruchamiam pobieranie nowych zamówień")
             self?.deltaUpdateOrders()
         }
         
@@ -1698,11 +1706,27 @@ class BaselinkerService: ObservableObject {
     // Funkcja pomocnicza, aby uzyskać dostęp do NotificationService
     private func getNotificationService() -> NotificationService? {
         #if os(iOS)
+        // Najpierw sprawdź globalną zmienną
+        if let globalService = globalNotificationService {
+            print("✅ Debug: Używam globalNotificationService")
+            return globalService
+        }
+        
         // Bezpieczne odwołanie się do AppDelegate poprzez UIApplication
         if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
+            // Debugowanie
+            if appDelegate.notificationService == nil {
+                print("⚠️ Debug: appDelegate.notificationService jest nil")
+            } else {
+                print("✅ Debug: appDelegate.notificationService istnieje")
+            }
             return appDelegate.notificationService
+        } else {
+            print("⚠️ Debug: Nie znaleziono AppDelegate")
         }
         #endif
+        
+        print("⚠️ Debug: Nie znaleziono notificationService - zwracam nil")
         return nil
     }
 } 
