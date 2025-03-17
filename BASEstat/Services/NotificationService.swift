@@ -8,6 +8,7 @@
 import Foundation
 import UserNotifications
 import Combine
+import UIKit
 
 // Definiujemy alias dla naszego typu Notification, aby uniknąć konfliktu z typem UserNotifications.Notification
 typealias AppNotification = BASEstat.Notification
@@ -103,9 +104,8 @@ class NotificationService: ObservableObject {
         
         // Użyj dźwięku kasy fiskalnej dla powiadomień o nowych zamówieniach
         if notification.type == .newOrder {
-            // W prawdziwej aplikacji użyj pliku dźwiękowego kasy fiskalnej
-            // content.sound = UNNotificationSound(named: UNNotificationSoundName("cash-register.wav"))
-            content.sound = UNNotificationSound.default
+            // Użyj pliku dźwiękowego kasy fiskalnej
+            content.sound = UNNotificationSound(named: UNNotificationSoundName("cash_register.wav"))
         } else {
             content.sound = UNNotificationSound.default
         }
@@ -188,6 +188,11 @@ class NotificationService: ObservableObject {
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             DispatchQueue.main.async {
                 print("🔔 Status powiadomień: \(settings.authorizationStatus.rawValue)")
+                print("🔔 Status powiadomień alert: \(settings.alertSetting.rawValue)")
+                print("🔔 Status powiadomień banner: \(settings.alertSetting.rawValue)")
+                print("🔔 Status powiadomień dźwięk: \(settings.soundSetting.rawValue)")
+                print("🔔 Status powiadomień badge: \(settings.badgeSetting.rawValue)")
+                print("🔔 Status powiadomień na ekranie blokady: \(settings.lockScreenSetting.rawValue)")
                 
                 if settings.authorizationStatus == .authorized {
                     print("✅ Powiadomienia są autoryzowane")
@@ -206,27 +211,18 @@ class NotificationService: ObservableObject {
                     // Dodajemy je do serwisu
                     self.addNotification(testNotification)
                     
-                    // Wysyłamy bezpośrednio powiadomienie systemowe
-                    let content = UNMutableNotificationContent()
-                    content.title = "Testowe powiadomienie"
-                    content.body = "To jest bezpośredni test powiadomienia systemowego"
-                    content.sound = UNNotificationSound.default
+                    // Wysyłamy powiadomienia z różnymi opóźnieniami, aby zwiększyć szansę na wyświetlenie
+                    self.sendTestNotificationWithDelay(1, title: "Test #1: Natychmiastowy")
                     
-                    let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-                    let request = UNNotificationRequest(
-                        identifier: UUID().uuidString,
-                        content: content,
-                        trigger: trigger
-                    )
-                    
-                    UNUserNotificationCenter.current().add(request) { error in
-                        if let error = error {
-                            print("❌ Błąd bezpośredniego powiadomienia: \(error.localizedDescription)")
-                        } else {
-                            print("✅ Bezpośrednie powiadomienie wysłane pomyślnie")
-                        }
+                    // Opóźnij drugie powiadomienie, aby zwiększyć szansę na powodzenie
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        self.sendTestNotificationWithDelay(0.5, title: "Test #2: Po 3 sekundach")
                     }
                     
+                    // Opóźnij trzecie powiadomienie, aby zwiększyć szansę na powodzenie
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                        self.sendTestNotificationWithDelay(0.5, title: "Test #3: Po 6 sekundach")
+                    }
                 } else {
                     print("⚠️ Powiadomienia nie są autoryzowane, próbuję uzyskać pozwolenie...")
                     self.requestNotificationPermission()
@@ -237,6 +233,94 @@ class NotificationService: ObservableObject {
                     }
                 }
             }
+        }
+    }
+    
+    private func sendTestNotificationWithDelay(_ seconds: TimeInterval, title: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.subtitle = "⚠️ Test powiadomień BASEstat"
+            content.body = "💰 To jest TESTOWE POWIADOMIENIE. \nUważaj! Kasa fiskalna dzwoni! 💰"
+            content.sound = UNNotificationSound(named: UNNotificationSoundName("cash_register.wav"))
+            content.badge = NSNumber(value: 1)
+            
+            // Zwiększ priorytet powiadomienia
+            content.threadIdentifier = "critical-test"
+            content.categoryIdentifier = "CRITICAL_CATEGORY"
+            
+            // Dodaj losowy identyfikator, aby uniknąć nadpisywania powiadomień
+            let uniqueId = UUID().uuidString
+            content.userInfo = [
+                "testId": uniqueId,
+                "priority": "high",
+                "critical": true
+            ]
+            
+            // Ustaw trigger z bardzo krótkim opóźnieniem
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+            let request = UNNotificationRequest(
+                identifier: uniqueId,
+                content: content,
+                trigger: trigger
+            )
+            
+            // Próba zdefiniowania kategorii powiadomień z akcjami
+            let viewAction = UNNotificationAction(
+                identifier: "VIEW_ACTION",
+                title: "Pokaż szczegóły",
+                options: .foreground
+            )
+            
+            let dismissAction = UNNotificationAction(
+                identifier: "DISMISS_ACTION",
+                title: "Zamknij",
+                options: .destructive
+            )
+            
+            let category = UNNotificationCategory(
+                identifier: "CRITICAL_CATEGORY",
+                actions: [viewAction, dismissAction],
+                intentIdentifiers: [],
+                options: [.customDismissAction]
+            )
+            
+            // Rejestracja kategorii
+            UNUserNotificationCenter.current().setNotificationCategories([category])
+            
+            print("📤 Wysyłanie powiadomienia testowego: \(title)")
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error = error {
+                    print("❌ Błąd powiadomienia [\(title)]: \(error.localizedDescription)")
+                    
+                    // Tylko w przypadku błędu pokazujemy alert w aplikacji
+                    DispatchQueue.main.async {
+                        self.showInAppAlert(title: "Błąd powiadomienia", message: error.localizedDescription)
+                    }
+                } else {
+                    print("✅ Powiadomienie [\(title)] wysłane pomyślnie")
+                    
+                    // Sprawdź liczbę oczekujących powiadomień
+                    UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+                        print("📋 Liczba oczekujących powiadomień: \(requests.count)")
+                    }
+                    
+                    // Wymuś zaktualizowanie odznaki aplikacji
+                    DispatchQueue.main.async {
+                        UIApplication.shared.applicationIconBadgeNumber = 1
+                    }
+                }
+            }
+        }
+    }
+    
+    // Wyświetla alert w aplikacji jako alternatywny sposób pokazania informacji
+    private func showInAppAlert(title: String, message: String) {
+        // Implementacja zależna od struktury aplikacji
+        // Na przykład przez NotificationCenter:
+        DispatchQueue.main.async {
+            let userInfo: [String: Any] = ["title": title, "message": message]
+            NotificationCenter.default.post(name: NSNotification.Name("ShowInAppAlert"), object: nil, userInfo: userInfo)
         }
     }
 } 

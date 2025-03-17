@@ -8,6 +8,10 @@
 import Foundation
 import Combine
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+import UserNotifications
 
 // Rozszerzenie dla Dictionary, aby konwertować do JSON string
 extension Dictionary {
@@ -525,6 +529,45 @@ class BaselinkerService: ObservableObject {
                     self.orders.append(contentsOf: newOrders)
                     
                     print("Odfiltrowano \(orders.count - newOrders.count) duplikatów zamówień")
+                    
+                    // Jeśli to aktualizacja delta i mamy nowe zamówienia, wysyłamy powiadomienia
+                    if isDeltaUpdate && !newOrders.isEmpty {
+                        print("🔔 Wykryto \(newOrders.count) nowych zamówień - wysyłam powiadomienia")
+                        
+                        // Pobieramy dzienne podsumowanie
+                        let summary = self.getTodaySummary()
+                        
+                        // Wysyłamy powiadomienia dla każdego nowego zamówienia
+                        for order in newOrders {
+                            // Sprawdzamy, czy mamy dostęp do notificationService
+                            #if os(iOS)
+                            if let notificationService = self.getNotificationService() {
+                                // Tworzymy treść powiadomienia
+                                let message = "Nowe zamówienie #\(order.id) - \(String(format: "%.2f", order.totalAmount)) zł\nDzisiaj: \(summary.orderCount) zamówień, \(String(format: "%.2f", summary.totalValue)) zł"
+                                
+                                // Tworzymy powiadomienie
+                                let notification = Notification(
+                                    title: "💰 Nowe zamówienie!",
+                                    message: message,
+                                    date: Date(),
+                                    type: .newOrder,
+                                    relatedOrderId: order.id,
+                                    orderAmount: order.totalAmount,
+                                    dailyOrderCount: summary.orderCount,
+                                    dailyOrderTotal: summary.totalValue
+                                )
+                                
+                                // Dodajemy powiadomienie do serwisu (co spowoduje jego wyświetlenie)
+                                notificationService.addNotification(notification)
+                                print("🔔 Utworzono powiadomienie dla nowego zamówienia: #\(order.id)")
+                            } else {
+                                print("⚠️ Nie znaleziono notificationService - nie można wysłać powiadomienia")
+                            }
+                            #else
+                            print("🔔 System powiadomień nie jest dostępny na tej platformie")
+                            #endif
+                        }
+                    }
                 }
                 
                 // Sortujemy zamówienia od najnowszych do najstarszych
@@ -1644,5 +1687,22 @@ class BaselinkerService: ObservableObject {
                 print("❌ Błąd połączenia z API podczas sprawdzania zamówień")
             }
         }
+    }
+    
+    // Funkcja do pobierania tylko nowych zamówień (delta update)
+    func fetchDeltaUpdate() {
+        print("🔄 Delta update: Przekierowuję do głównej metody aktualizacji")
+        deltaUpdateOrders()
+    }
+    
+    // Funkcja pomocnicza, aby uzyskać dostęp do NotificationService
+    private func getNotificationService() -> NotificationService? {
+        #if os(iOS)
+        // Bezpieczne odwołanie się do AppDelegate poprzez UIApplication
+        if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
+            return appDelegate.notificationService
+        }
+        #endif
+        return nil
     }
 } 

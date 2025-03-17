@@ -29,9 +29,22 @@
 		D3A150ED2D8601FF006A6D48 /* BASEstatUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BASEstatUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		D3C3A7B82D88C72200B6D55E /* Exceptions for "BASEstat" folder in "BASEstat" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = D3A150D22D8601FC006A6D48 /* BASEstat */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		D3A150D52D8601FC006A6D48 /* BASEstat */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				D3C3A7B82D88C72200B6D55E /* Exceptions for "BASEstat" folder in "BASEstat" target */,
+			);
 			path = BASEstat;
 			sourceTree = "<group>";
 		};
@@ -424,7 +437,8 @@
 				DEVELOPMENT_ASSET_PATHS = "\"BASEstat/Preview Content\"";
 				DEVELOPMENT_TEAM = 88U2F8ME2L;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BASEstat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -453,7 +467,8 @@
 				DEVELOPMENT_ASSET_PATHS = "\"BASEstat/Preview Content\"";
 				DEVELOPMENT_TEAM = 88U2F8ME2L;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BASEstat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

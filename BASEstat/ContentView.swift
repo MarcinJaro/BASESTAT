@@ -6,13 +6,19 @@
 //
 
 import SwiftUI
+import UserNotifications
 
 struct ContentView: View {
     @ObservedObject var baselinkerService: BaselinkerService
     @State private var selectedTab = 0
     @State private var showingSettings = false
-    @State private var showingConnectionAlert = false
     @StateObject private var tabSelection: TabSelection
+    
+    // System alertów
+    @State private var activeAlert: ActiveAlert? = nil
+    
+    // Flaga do testowego powiadomienia
+    @State private var showTestNotification = false
     
     init(baselinkerService: BaselinkerService) {
         self.baselinkerService = baselinkerService
@@ -22,6 +28,19 @@ struct ContentView: View {
             set: { _ in }
         )
         _tabSelection = StateObject(wrappedValue: TabSelection(selection: initialBinding))
+    }
+    
+    // Typ enumeracyjny dla różnych alertów
+    enum ActiveAlert: Identifiable {
+        case connection(message: String)
+        case notification(title: String, message: String)
+        
+        var id: String {
+            switch self {
+            case .connection: return "connection"
+            case .notification: return "notification"
+            }
+        }
     }
     
     var body: some View {
@@ -74,26 +93,63 @@ struct ContentView: View {
             // Obserwujemy zmiany statusu połączenia
             .onChange(of: baselinkerService.connectionStatus) { newStatus in
                 if case .failed(let message) = newStatus {
-                    showingConnectionAlert = true
+                    activeAlert = .connection(message: message)
                 }
             }
             .sheet(isPresented: $showingSettings) {
                 SettingsView(baselinkerService: baselinkerService)
             }
-            .alert(isPresented: $showingConnectionAlert) {
-                if case .failed(let message) = baselinkerService.connectionStatus {
+            .alert(item: $activeAlert) { alert in
+                switch alert {
+                case .connection(let message):
                     return Alert(
                         title: Text("Błąd połączenia"),
                         message: Text(message),
                         dismissButton: .default(Text("OK"))
                     )
-                } else {
+                case .notification(let title, let message):
                     return Alert(
-                        title: Text("Błąd"),
-                        message: Text("Wystąpił nieznany błąd"),
+                        title: Text(title),
+                        message: Text(message),
                         dismissButton: .default(Text("OK"))
                     )
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ShowInAppAlert"))) { notification in
+                if let userInfo = notification.userInfo,
+                   let title = userInfo["title"] as? String,
+                   let message = userInfo["message"] as? String {
+                    activeAlert = .notification(title: title, message: message)
+                }
+            }
+            .onAppear {
+                // Jeśli to pierwszy start aplikacji, wyślij testowe powiadomienie po 3 sekundach
+                if showTestNotification {
+                    showTestNotification = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        sendTestLocalNotification()
+                    }
+                }
+            }
+        }
+    }
+    
+    // Funkcja do wysyłania testowego powiadomienia lokalnego
+    private func sendTestLocalNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "Test powiadomienia ContentView"
+        content.subtitle = "⚠️ BARDZO WAŻNE"
+        content.body = "🚨 Bezpośredni test powiadomienia z ContentView"
+        content.sound = UNNotificationSound.defaultCritical
+        
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.5, repeats: false)
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
+        
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("❌ Błąd testu powiadomienia ContentView: \(error.localizedDescription)")
+            } else {
+                print("✅ Test powiadomienia ContentView wysłany pomyślnie")
             }
         }
     }
@@ -1330,6 +1386,12 @@ struct SettingsView: View {
     @State private var connectionAlertMessage = ""
     @State private var showDebugInfo = false
     @ObservedObject var baselinkerService: BaselinkerService
+    @EnvironmentObject private var notificationService: NotificationService
+    
+    // Opcje stylu powiadomień
+    @State private var showBanners = true
+    @State private var playSound = true
+    @State private var showBadges = true
     
     init(baselinkerService: BaselinkerService) {
         self.baselinkerService = baselinkerService
@@ -1340,6 +1402,11 @@ struct SettingsView: View {
         
         // Inicjalizacja zmiennej stanu
         _syncInterval = State(initialValue: initialInterval)
+        
+        // Załaduj ustawienia powiadomień
+        _showBanners = State(initialValue: UserDefaults.standard.bool(forKey: "showNotificationBanners"))
+        _playSound = State(initialValue: UserDefaults.standard.bool(forKey: "playNotificationSound"))
+        _showBadges = State(initialValue: UserDefaults.standard.bool(forKey: "showNotificationBadges"))
     }
     
     var body: some View {
@@ -1397,6 +1464,41 @@ struct SettingsView: View {
                         Toggle("Nowe zamówienia", isOn: .constant(true))
                         Toggle("Zmiany statusu", isOn: .constant(true))
                         Toggle("Niski stan magazynowy", isOn: .constant(true))
+                        
+                        Divider()
+                        
+                        Text("Styl powiadomień")
+                            .font(.headline)
+                            .padding(.top, 4)
+                        
+                        Toggle("Pokaż bannery", isOn: $showBanners)
+                            .onChange(of: showBanners) { newValue in
+                                UserDefaults.standard.set(newValue, forKey: "showNotificationBanners")
+                            }
+                        
+                        Toggle("Odtwarzaj dźwięk", isOn: $playSound)
+                            .onChange(of: playSound) { newValue in
+                                UserDefaults.standard.set(newValue, forKey: "playNotificationSound")
+                            }
+                        
+                        Toggle("Pokaż odznaki", isOn: $showBadges)
+                            .onChange(of: showBadges) { newValue in
+                                UserDefaults.standard.set(newValue, forKey: "showNotificationBadges")
+                            }
+                        
+                        Divider()
+                        
+                        Button(action: {
+                            // Testowanie powiadomień
+                            notificationService.testNotifications()
+                        }) {
+                            HStack {
+                                Image(systemName: "bell.badge")
+                                Text("Testuj powiadomienia")
+                            }
+                            .foregroundColor(.blue)
+                        }
+                        .padding(.vertical, 4)
                     }
                 }
                 
@@ -1598,19 +1700,19 @@ struct InventoryProductsView: View {
                         }
                     }
                 }
-                
-                // Przełącznik do filtrowania produktów z niskim stanem
-                Toggle(isOn: $showLowStockOnly) {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundColor(.orange)
-                        Text("Pokaż tylko produkty z niskim stanem magazynowym")
-                            .font(.subheadline)
-                    }
-                }
-                .toggleStyle(SwitchToggleStyle(tint: .orange))
             }
             .padding(.horizontal)
+            
+            // Przełącznik do filtrowania produktów z niskim stanem
+            Toggle(isOn: $showLowStockOnly) {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(.orange)
+                    Text("Pokaż tylko produkty z niskim stanem magazynowym")
+                        .font(.subheadline)
+                }
+            }
+            .toggleStyle(SwitchToggleStyle(tint: .orange))
             
             if baselinkerService.isLoadingProducts {
                 Spacer()
