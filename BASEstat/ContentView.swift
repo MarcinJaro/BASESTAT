@@ -270,6 +270,22 @@ struct DashboardView: View {
                     }
                 }
                 .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
+                .help("Odśwież wszystkie zamówienia")
+            }
+            
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    baselinkerService.deltaUpdateOrders()
+                }) {
+                    if baselinkerService.isLoading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
+                .help("Pobierz tylko nowe zamówienia")
             }
             
             ToolbarItem(placement: .navigationBarLeading) {
@@ -319,9 +335,41 @@ struct OrdersView: View {
     @State private var searchText = ""
     @State private var selectedStatusFilter: String? = nil
     @State private var showingSettings = false
+    @State private var sortOrder: SortOrder = .newest
+    
+    enum SortOrder {
+        case newest
+        case oldest
+        case highestValue
+        case lowestValue
+        
+        var displayName: String {
+            switch self {
+            case .newest: return "Od najnowszych"
+            case .oldest: return "Od najstarszych"
+            case .highestValue: return "Najwyższa wartość"
+            case .lowestValue: return "Najniższa wartość"
+            }
+        }
+    }
     
     var filteredOrders: [Order] {
-        var filtered = baselinkerService.orders
+        // Najpierw usuwamy duplikaty z listy zamówień
+        var uniqueOrders: [Order] = []
+        var seenIds = Set<String>()
+        
+        for order in baselinkerService.orders {
+            if !seenIds.contains(order.id) {
+                uniqueOrders.append(order)
+                seenIds.insert(order.id)
+            }
+        }
+        
+        // Debugowanie - wypisz liczbę zamówień
+        print("Liczba wszystkich zamówień: \(baselinkerService.orders.count)")
+        print("Liczba unikalnych zamówień: \(uniqueOrders.count)")
+        
+        var filtered = uniqueOrders
         
         if !searchText.isEmpty {
             filtered = filtered.filter { 
@@ -332,6 +380,18 @@ struct OrdersView: View {
         
         if let status = selectedStatusFilter {
             filtered = filtered.filter { $0.status == status }
+        }
+        
+        // Sortowanie zamówień
+        switch sortOrder {
+        case .newest:
+            filtered.sort { $0.date > $1.date }
+        case .oldest:
+            filtered.sort { $0.date < $1.date }
+        case .highestValue:
+            filtered.sort { $0.totalAmount > $1.totalAmount }
+        case .lowestValue:
+            filtered.sort { $0.totalAmount < $1.totalAmount }
         }
         
         return filtered
@@ -376,16 +436,43 @@ struct OrdersView: View {
                         .padding(.horizontal)
                     }
                     
-                    if baselinkerService.isLoading {
+                    if baselinkerService.isLoading && baselinkerService.orders.isEmpty {
                         Spacer()
                         VStack {
                             ProgressView("Ładowanie zamówień...")
                                 .padding()
-                            Text("Trwa synchronizacja z Baselinker")
+                            Text(baselinkerService.loadingOrdersProgress)
                                 .font(.caption)
                                 .foregroundColor(.gray)
                         }
                         Spacer()
+                    } else if baselinkerService.isLoading {
+                        // Pokazujemy informację o ładowaniu, ale nie ukrywamy listy zamówień
+                        VStack {
+                            List {
+                                ForEach(filteredOrders, id: \.self) { order in
+                                    NavigationLink(destination: OrderDetailView(order: order)) {
+                                        OrderRow(order: order)
+                                    }
+                                }
+                            }
+                            .listStyle(InsetGroupedListStyle())
+                            
+                            // Informacja o ładowaniu na dole listy
+                            HStack {
+                                Spacer()
+                                VStack {
+                                    ProgressView()
+                                        .padding(.top, 4)
+                                    Text(baselinkerService.loadingOrdersProgress)
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                        .padding(.bottom, 8)
+                                }
+                                Spacer()
+                            }
+                            .background(Color(.systemBackground))
+                        }
                     } else if let error = baselinkerService.error {
                         Spacer()
                         VStack(spacing: 16) {
@@ -426,7 +513,7 @@ struct OrdersView: View {
                         Spacer()
                     } else {
                         List {
-                            ForEach(filteredOrders) { order in
+                            ForEach(filteredOrders, id: \.self) { order in
                                 NavigationLink(destination: OrderDetailView(order: order)) {
                                     OrderRow(order: order)
                                 }
@@ -441,6 +528,25 @@ struct OrdersView: View {
         .searchable(text: $searchText, prompt: "Szukaj zamówień")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    ForEach([SortOrder.newest, .oldest, .highestValue, .lowestValue], id: \.self) { order in
+                        Button(action: {
+                            sortOrder = order
+                        }) {
+                            HStack {
+                                Text(order.displayName)
+                                if sortOrder == order {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Sortuj", systemImage: "arrow.up.arrow.down")
+                }
+            }
+            
+            ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: {
                     baselinkerService.fetchOrders()
                 }) {
@@ -452,6 +558,22 @@ struct OrdersView: View {
                     }
                 }
                 .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
+                .help("Odśwież wszystkie zamówienia")
+            }
+            
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    baselinkerService.deltaUpdateOrders()
+                }) {
+                    if baselinkerService.isLoading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
+                .help("Pobierz tylko nowe zamówienia")
             }
             
             ToolbarItem(placement: .navigationBarLeading) {
@@ -494,7 +616,7 @@ struct OrderRow: View {
                 Text("#\(order.orderNumber)")
                     .font(.headline)
                 Spacer()
-                OrderStatusBadge(status: order.status)
+                OrderStatusBadge(status: order.status, statusName: order.statusName, statusColor: order.statusColor)
             }
             
             Text(order.customerName)
@@ -523,8 +645,33 @@ struct OrderRow: View {
 
 struct OrderStatusBadge: View {
     var status: String
+    var statusName: String?
+    var statusColor: String?
     
     var statusInfo: (name: String, color: Color) {
+        // Jeśli mamy nazwę i kolor statusu z API, użyj ich
+        if let name = statusName, !name.isEmpty {
+            let color: Color
+            if let colorHex = statusColor, !colorHex.isEmpty {
+                color = Color(hex: colorHex) ?? .gray
+            } else {
+                // Fallback do standardowych kolorów
+                guard let orderStatus = OrderStatus(rawValue: status) else {
+                    return ("Nieznany", .gray)
+                }
+                
+                switch orderStatus.color {
+                case "blue": color = .blue
+                case "orange": color = .orange
+                case "green": color = .green
+                case "red": color = .red
+                default: color = .gray
+                }
+            }
+            return (name, color)
+        }
+        
+        // Fallback do standardowych statusów
         guard let orderStatus = OrderStatus(rawValue: status) else {
             return ("Nieznany", .gray)
         }
@@ -572,7 +719,7 @@ struct OrderDetailView: View {
                     
                     Spacer()
                     
-                    OrderStatusBadge(status: order.status)
+                    OrderStatusBadge(status: order.status, statusName: order.statusName, statusColor: order.statusColor)
                 }
                 
                 Divider()
@@ -1144,15 +1291,26 @@ struct NotificationRow: View {
 }
 
 struct SettingsView: View {
-    @State private var apiToken = ""
+    @State private var apiToken = UserDefaults.standard.string(forKey: "baselinkerApiToken") ?? ""
     @State private var notificationsEnabled = true
     @State private var darkModeEnabled = false
-    @State private var syncInterval = 15.0
+    @State private var syncInterval: Double
     @State private var isTestingConnection = false
     @State private var showConnectionAlert = false
     @State private var connectionAlertMessage = ""
     @State private var showDebugInfo = false
     @ObservedObject var baselinkerService: BaselinkerService
+    
+    init(baselinkerService: BaselinkerService) {
+        self.baselinkerService = baselinkerService
+        
+        // Pobierz zapisaną częstotliwość synchronizacji lub użyj domyślnej wartości 30 sekund
+        let savedInterval = UserDefaults.standard.double(forKey: "syncIntervalInSeconds")
+        let initialInterval = savedInterval > 0 ? savedInterval / 60.0 : 0.5 // Konwertuj sekundy na minuty
+        
+        // Inicjalizacja zmiennej stanu
+        _syncInterval = State(initialValue: initialInterval)
+    }
     
     var body: some View {
         NavigationView {
@@ -1214,8 +1372,14 @@ struct SettingsView: View {
                 
                 Section(header: Text("Synchronizacja")) {
                     VStack {
-                        Text("Częstotliwość synchronizacji: \(Int(syncInterval)) min")
-                        Slider(value: $syncInterval, in: 5...60, step: 5)
+                        Text("Częstotliwość synchronizacji: \(formatSyncInterval(syncInterval))")
+                        Slider(value: $syncInterval, in: 0.5...15, step: 0.5)
+                            .onChange(of: syncInterval) { newValue in
+                                // Konwertujemy minuty na sekundy
+                                let intervalInSeconds = newValue * 60
+                                // Aktualizujemy częstotliwość synchronizacji
+                                baselinkerService.updateSyncInterval(intervalInSeconds)
+                            }
                     }
                     
                     Button(action: {
@@ -1273,6 +1437,24 @@ struct SettingsView: View {
                     message: Text(connectionAlertMessage),
                     dismissButton: .default(Text("OK"))
                 )
+            }
+        }
+    }
+    
+    private func formatSyncInterval(_ interval: Double) -> String {
+        if interval < 1.0 {
+            // Jeśli mniej niż 1 minuta, pokazuj w sekundach
+            let seconds = Int(interval * 60)
+            return "\(seconds) sekund"
+        } else {
+            // Dla wartości >= 1 minuty
+            let minutes = Int(interval)
+            let seconds = Int((interval - Double(minutes)) * 60)
+            
+            if seconds == 0 {
+                return "\(minutes) min"
+            } else {
+                return "\(minutes) min \(seconds) s"
             }
         }
     }

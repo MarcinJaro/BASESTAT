@@ -29,6 +29,9 @@ struct BASEstatApp: App {
                     
                     // Uruchamiamy automatyczne odświeżanie podsumowania dziennego
                     baselinkerService.startDailySummaryAutoRefresh()
+                    
+                    // Uruchamiamy automatyczne pobieranie nowych zamówień co 30 sekund
+                    baselinkerService.startDeltaUpdateAutoRefresh()
                 }
             
             // Nowy design aplikacji - zakomentowany do czasu pełnej implementacji

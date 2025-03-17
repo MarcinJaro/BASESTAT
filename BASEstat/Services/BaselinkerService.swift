@@ -142,6 +142,8 @@ class BaselinkerService: ObservableObject {
     @Published var error: String? = nil
     @Published var connectionStatus: ConnectionStatus = .notConnected
     @Published var lastResponseDebug: String? = nil
+    @Published var orderStatuses: [OrderStatusInfo] = []
+    @Published var loadingOrdersProgress: String = ""
     
     // Nowe zmienne do obsługi produktów
     @Published var inventories: [Inventory] = []
@@ -153,6 +155,7 @@ class BaselinkerService: ObservableObject {
     
     private var cancellables = Set<AnyCancellable>()
     private var summaryTimer: Timer?
+    private var deltaUpdateTimer: Timer?
     
     enum ConnectionStatus: Equatable {
         case notConnected
@@ -203,26 +206,34 @@ class BaselinkerService: ObservableObject {
     }
     
     private func loadApiToken() {
-        // W rzeczywistej aplikacji, wczytaj token z Keychain
-        // Na potrzeby przykładu używamy hardcoded wartości
-        if apiToken.isEmpty {
-            apiToken = "twój_token_api" // W rzeczywistej aplikacji zastąp to tokenem z Keychain
-            connectionStatus = .notConnected
-        } else {
+        // Sprawdź, czy token jest zapisany w UserDefaults
+        if let savedToken = UserDefaults.standard.string(forKey: "baselinkerApiToken"), !savedToken.isEmpty {
+            self.apiToken = savedToken
+            
             // Jeśli token jest już ustawiony, sprawdź połączenie
-            testConnection { success, message in
+            testConnection { [weak self] success, message in
+                guard let self = self else { return }
                 // Aktualizujemy status połączenia na podstawie wyniku
-                if success {
-                    self.connectionStatus = .connected
-                } else {
-                    self.connectionStatus = .failed(message)
+                DispatchQueue.main.async {
+                    if success {
+                        self.connectionStatus = .connected
+                    } else {
+                        self.connectionStatus = .failed(message)
+                    }
                 }
+            }
+        } else {
+            // Brak zapisanego tokenu
+            DispatchQueue.main.async {
+                self.apiToken = ""
+                self.connectionStatus = .notConnected
             }
         }
     }
     
     func saveApiToken(_ token: String) {
-        // W rzeczywistej aplikacji, zapisz token w Keychain
+        // Zapisz token w UserDefaults
+        UserDefaults.standard.set(token, forKey: "baselinkerApiToken")
         self.apiToken = token
         
         // Po zapisaniu tokenu, przetestuj połączenie
@@ -261,7 +272,9 @@ class BaselinkerService: ObservableObject {
     
     func testConnection() {
         // Ustawiamy status na "łączenie"
-        self.connectionStatus = .connecting
+        DispatchQueue.main.async {
+            self.connectionStatus = .connecting
+        }
         
         // Wywołujemy pełną wersję funkcji testConnection z callbackiem
         testConnection { [weak self] success, message in
@@ -274,6 +287,8 @@ class BaselinkerService: ObservableObject {
                     self.fetchOrders()
                     // Pobierz również listę magazynów
                     self.fetchInventories()
+                    // Pobierz listę statusów zamówień
+                    self.fetchOrderStatusList()
                 } else {
                     self.connectionStatus = .failed(message)
                 }
@@ -339,44 +354,50 @@ class BaselinkerService: ObservableObject {
         DispatchQueue.main.async {
             self.isLoading = true
             self.error = nil
+            self.loadingOrdersProgress = "Pobieranie zamówień..."
             
-            // Resetujemy listę zamówień przed pobraniem nowych
-            self.orders = []
+            // Nie resetujemy listy zamówień, aby nie znikały podczas odświeżania
+            // Zamówienia zostaną zaktualizowane po otrzymaniu odpowiedzi
         }
         
         // Pobieramy pierwszą partię zamówień
-        fetchOrdersBatch(dateFrom: dateFrom, dateTo: dateTo, statusId: statusId, idFrom: nil)
+        fetchOrdersBatch(dateFrom: dateFrom, dateTo: dateTo, statusId: statusId, lastConfirmedDate: nil)
     }
     
-    private func fetchOrdersBatch(dateFrom: Date? = nil, dateTo: Date? = nil, statusId: String? = nil, idFrom: String? = nil) {
+    private func fetchOrdersBatch(dateFrom: Date? = nil, dateTo: Date? = nil, statusId: String? = nil, lastConfirmedDate: Date? = nil, isDeltaUpdate: Bool = false) {
         // Tworzymy zagnieżdżony słownik parametrów
         var orderParameters: [String: Any] = [
-            "get_unconfirmed_orders": false, // Pobieramy tylko potwierdzone zamówienia
+            "get_unconfirmed_orders": false // Pobieramy tylko potwierdzone zamówienia
         ]
         
         // Dodajemy opcjonalne parametry, jeśli zostały podane
-        if let dateFrom = dateFrom {
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd"
-            orderParameters["date_from"] = dateFormatter.string(from: dateFrom)
+        if let lastConfirmedDate = lastConfirmedDate {
+            // Używamy lastConfirmedDate + 1 sekunda jako date_confirmed_from, aby uniknąć duplikatów
+            let nextSecond = lastConfirmedDate.addingTimeInterval(1)
+            orderParameters["date_confirmed_from"] = Int(nextSecond.timeIntervalSince1970)
+            if isDeltaUpdate {
+                print("🔄 Delta update: Pobieranie zamówień od daty: \(nextSecond)")
+            } else {
+                print("🔄 Pobieranie zamówień od daty: \(nextSecond)")
+            }
+        } else if let dateFrom = dateFrom {
+            // Jeśli nie mamy lastConfirmedDate, ale mamy dateFrom, używamy dateFrom
+            orderParameters["date_confirmed_from"] = Int(dateFrom.timeIntervalSince1970)
         }
         
         if let dateTo = dateTo {
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd"
-            orderParameters["date_to"] = dateFormatter.string(from: dateTo)
+            orderParameters["date_confirmed_to"] = Int(dateTo.timeIntervalSince1970)
         }
         
         if let statusId = statusId {
             orderParameters["status_id"] = statusId
         }
         
-        if let idFrom = idFrom {
-            orderParameters["id_from"] = idFrom
-        }
-        
         // Dodajemy parametr, aby upewnić się, że API zwraca obrazki produktów
         orderParameters["include_product_images"] = true
+        
+        // Logowanie parametrów żądania
+        print("📤 Parametry żądania getOrders: \(orderParameters)")
         
         // Konwertujemy parametry do formatu JSON
         guard let parametersData = try? JSONSerialization.data(withJSONObject: orderParameters),
@@ -410,17 +431,73 @@ class BaselinkerService: ObservableObject {
         
         URLSession.shared.dataTaskPublisher(for: request)
             .map(\.data)
-            .tryMap { data -> Data in
+            .tryMap { [weak self] data -> [Order] in
+                guard let self = self else { throw NSError(domain: "Brak referencji do self", code: -1) }
+                
                 // Logujemy odpowiedź do debugowania
                 self.logResponse(data)
                 
-                // Sprawdzamy, czy odpowiedź zawiera błąd
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let errorMessage = json["error_message"] as? String {
-                    throw NSError(domain: "BaselinkerAPI", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+                guard let jsonObject = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                    print("❌ Nieprawidłowa odpowiedź JSON")
+                    throw NSError(domain: "Nieprawidłowa odpowiedź JSON", code: -1)
                 }
                 
-                return data
+                guard let status = jsonObject["status"] as? String, status == "SUCCESS" else {
+                    let errorMessage = (jsonObject["error_message"] as? String) ?? "Nieznany błąd"
+                    print("❌ Błąd API: \(errorMessage)")
+                    throw NSError(domain: errorMessage, code: -1)
+                }
+                
+                guard let ordersData = jsonObject["orders"] as? [[String: Any]] else {
+                    print("❌ Brak danych o zamówieniach")
+                    throw NSError(domain: "Brak danych o zamówieniach", code: -1)
+                }
+                
+                print("✅ Pobrano \(ordersData.count) zamówień z API")
+                
+                let ordersJsonData = try JSONSerialization.data(withJSONObject: ordersData, options: [])
+                
+                do {
+                    // Tworzymy dekoder z niestandardową strategią dekodowania dat
+                    let decoder = JSONDecoder()
+                    let dateFormatter = DateFormatter()
+                    dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                    decoder.dateDecodingStrategy = .custom { decoder in
+                        let container = try decoder.singleValueContainer()
+                        let dateString = try container.decode(String.self)
+                        
+                        // Próbujemy najpierw z formatem yyyy-MM-dd HH:mm:ss
+                        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                        if let date = dateFormatter.date(from: dateString) {
+                            return date
+                        }
+                        
+                        // Jeśli nie zadziała, próbujemy z formatem timestamp
+                        if let timestamp = Double(dateString) {
+                            return Date(timeIntervalSince1970: timestamp)
+                        }
+                        
+                        // Jeśli nic nie zadziała, zwracamy aktualną datę
+                        print("⚠️ Nie udało się zdekodować daty: \(dateString)")
+                        return Date()
+                    }
+                    
+                    var newOrders = try decoder.decode([Order].self, from: ordersJsonData)
+                    
+                    // Uzupełniamy informacje o statusie dla każdego zamówienia
+                    for i in 0..<newOrders.count {
+                        if let statusInfo = self.getOrderStatusInfo(for: newOrders[i].status) {
+                            newOrders[i].statusName = statusInfo.name
+                            newOrders[i].statusColor = statusInfo.color
+                        }
+                    }
+                    
+                    print("✅ Pomyślnie zdekodowano \(newOrders.count) zamówień")
+                    return newOrders
+                } catch {
+                    print("❌ Błąd dekodowania zamówień: \(error.localizedDescription)")
+                    throw error
+                }
             }
             .receive(on: DispatchQueue.main)
             .sink(receiveCompletion: { [weak self] completion in
@@ -429,64 +506,92 @@ class BaselinkerService: ObservableObject {
                     self?.error = "Błąd pobierania danych: \(error.localizedDescription)"
                     self?.connectionStatus = .failed(error.localizedDescription)
                 }
-            }, receiveValue: { [weak self] data in
-                // Ręczne parsowanie JSON zamiast używania dekodera
-                do {
-                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let status = json["status"] as? String,
-                       status == "SUCCESS" {
-                        
-                        if let ordersArray = json["orders"] as? [[String: Any]] {
-                            // Debugowanie - wyświetl pierwsze zamówienie
-                            if let firstOrder = ordersArray.first {
-                                self?.debugFirstOrder(firstOrder)
-                            }
-                            
-                            let decoder = JSONDecoder()
-                            
-                            // Konwertujemy słownik zamówień z powrotem do JSON i dekodujemy
-                            let ordersData = try JSONSerialization.data(withJSONObject: ordersArray)
-                            let newOrders = try decoder.decode([Order].self, from: ordersData)
-                            
-                            // Dodajemy nowe zamówienia do istniejącej listy na głównym wątku
-                            DispatchQueue.main.async {
-                                self?.orders.append(contentsOf: newOrders)
-                                self?.connectionStatus = .connected
-                                self?.error = nil
-                            }
-                            
-                            // Sprawdzamy, czy otrzymaliśmy maksymalną liczbę zamówień (100)
-                            // Jeśli tak, to pobieramy kolejną partię
-                            if newOrders.count == 100, let lastOrderId = newOrders.last?.id {
-                                // Pobieramy kolejną partię zamówień, zaczynając od ID ostatniego zamówienia
-                                self?.fetchOrdersBatch(dateFrom: dateFrom, dateTo: dateTo, statusId: statusId, idFrom: lastOrderId)
-                            } else {
-                                // Zakończyliśmy pobieranie wszystkich zamówień
-                                self?.isLoading = false
-                                
-                                // Sortujemy zamówienia od najnowszych do najstarszych
-                                self?.orders.sort { $0.date > $1.date }
-                                
-                                print("Pobrano łącznie \(self?.orders.count ?? 0) zamówień")
-                            }
+            }, receiveValue: { [weak self] orders in
+                guard let self = self else { return }
+                
+                // Aktualizujemy listę zamówień (jesteśmy już na głównym wątku dzięki receive(on: DispatchQueue.main))
+                if lastConfirmedDate == nil {
+                    // Jeśli to pierwsza partia, zastępujemy istniejącą listę
+                    self.orders = orders
+                } else {
+                    // Jeśli to kolejna partia, dodajemy do istniejącej listy, ale usuwamy duplikaty
+                    // Tworzymy zbiór istniejących ID zamówień
+                    let existingIds = Set(self.orders.map { $0.id })
+                    
+                    // Filtrujemy nowe zamówienia, aby dodać tylko te, których jeszcze nie mamy
+                    let newOrders = orders.filter { !existingIds.contains($0.id) }
+                    
+                    // Dodajemy tylko unikalne zamówienia
+                    self.orders.append(contentsOf: newOrders)
+                    
+                    print("Odfiltrowano \(orders.count - newOrders.count) duplikatów zamówień")
+                }
+                
+                // Sortujemy zamówienia od najnowszych do najstarszych
+                self.orders.sort { $0.date > $1.date }
+                
+                print("Pobrano łącznie \(self.orders.count) unikalnych zamówień")
+                
+                // Sprawdzamy, czy są jeszcze zamówienia do pobrania
+                if orders.count == 100 {  // Jeśli pobraliśmy pełną stronę (100 zamówień), to prawdopodobnie są jeszcze zamówienia do pobrania
+                    if isDeltaUpdate {
+                        print("🔄 Delta update: Pobrano pełną stronę zamówień (\(orders.count)). Pobieranie kolejnej partii...")
+                    } else {
+                        print("Pobrano pełną stronę zamówień (\(orders.count)). Pobieranie kolejnej partii...")
+                    }
+                    
+                    // Znajdujemy najnowszą datę potwierdzenia zamówienia w bieżącej partii
+                    if let lastOrder = orders.max(by: { $0.dateConfirmed < $1.dateConfirmed }) {
+                        // Aktualizujemy informację o postępie
+                        if isDeltaUpdate {
+                            self.loadingOrdersProgress = "Pobrano \(self.orders.count) zamówień. Pobieranie nowych..."
                         } else {
-                            self?.isLoading = false
-                            self?.error = "Brak danych o zamówieniach w odpowiedzi"
-                            self?.connectionStatus = .failed("Brak danych o zamówieniach")
+                            self.loadingOrdersProgress = "Pobrano \(self.orders.count) zamówień. Pobieranie kolejnej partii..."
+                        }
+                        
+                        // Dodajemy opóźnienie przed pobraniem kolejnej partii, aby uniknąć przekroczenia limitu API (100 zapytań/min)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                            // Pobieramy kolejną partię zamówień, używając daty potwierdzenia ostatniego zamówienia
+                            self.fetchOrdersBatch(dateFrom: dateFrom, dateTo: dateTo, statusId: statusId, lastConfirmedDate: lastOrder.dateConfirmed, isDeltaUpdate: isDeltaUpdate)
                         }
                     } else {
-                        self?.isLoading = false
-                        self?.error = "Nieprawidłowa odpowiedź API"
-                        self?.connectionStatus = .failed("Nieprawidłowa odpowiedź API")
+                        // Nie udało się znaleźć daty potwierdzenia - kończymy pobieranie
+                        self.connectionStatus = .connected
+                        self.error = nil
+                        self.isLoading = false
+                        if isDeltaUpdate {
+                            self.loadingOrdersProgress = "Pobrano nowe zamówienia: \(self.orders.count)"
+                            print("🔄 Delta update: Zakończono pobieranie nowych zamówień. Łącznie: \(self.orders.count)")
+                        } else {
+                            self.loadingOrdersProgress = "Pobrano wszystkie zamówienia: \(self.orders.count)"
+                            print("Zakończono pobieranie wszystkich zamówień. Łącznie: \(self.orders.count)")
+                        }
                     }
-                } catch {
-                    self?.isLoading = false
-                    print("Błąd parsowania JSON: \(error)")
-                    self?.error = "Błąd parsowania danych: \(error.localizedDescription)"
-                    self?.connectionStatus = .failed(error.localizedDescription)
+                } else {
+                    // Wszystkie zamówienia zostały pobrane
+                    self.connectionStatus = .connected
+                    self.error = nil
+                    self.isLoading = false
+                    if isDeltaUpdate {
+                        if orders.isEmpty {
+                            self.loadingOrdersProgress = "Brak nowych zamówień"
+                            print("🔄 Delta update: Brak nowych zamówień")
+                        } else {
+                            self.loadingOrdersProgress = "Pobrano \(orders.count) nowych zamówień"
+                            print("🔄 Delta update: Pobrano \(orders.count) nowych zamówień. Łącznie: \(self.orders.count)")
+                        }
+                    } else {
+                        self.loadingOrdersProgress = "Pobrano wszystkie zamówienia: \(self.orders.count)"
+                        print("Zakończono pobieranie wszystkich zamówień. Łącznie: \(self.orders.count)")
+                    }
                 }
             })
             .store(in: &cancellables)
+    }
+    
+    // Pomocnicza funkcja do znajdowania informacji o statusie
+    private func getOrderStatusInfo(for statusId: String) -> OrderStatusInfo? {
+        return orderStatuses.first { $0.id == statusId }
     }
     
     // Funkcja pomocnicza do wysyłania żądań API
@@ -943,6 +1048,7 @@ class BaselinkerService: ObservableObject {
                                 self.error = "Brak katalogów w odpowiedzi"
                             }
                         } else {
+                            self.isLoadingProducts = false
                             let errorMessage = (try? JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any])?["error_message"] as? String ?? "Nieznany błąd"
                             print("❌ Błąd API: \(errorMessage)")
                             self.error = "Błąd API: \(errorMessage)"
@@ -966,8 +1072,10 @@ class BaselinkerService: ObservableObject {
             return
         }
         
-        isLoadingProducts = true
-        selectedInventoryId = inventoryId
+        DispatchQueue.main.async {
+            self.isLoadingProducts = true
+            self.selectedInventoryId = inventoryId
+        }
         
         print("🔍 Rozpoczynam pobieranie produktów z katalogu ID=\(inventoryId), strona=\(page)")
         
@@ -1032,7 +1140,7 @@ class BaselinkerService: ObservableObject {
                                     if productsDict.count >= 1000 {
                                         print("🔄 Pobieranie kolejnej strony produktów (\(page + 1))...")
                                         // Dodajemy małe opóźnienie, aby uniknąć przekroczenia limitów API
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                                             // Rekurencyjnie pobieramy kolejną stronę
                                             self.fetchInventoryProducts(inventoryId: inventoryId, page: page + 1, allProductIds: updatedProductIds)
                                         }
@@ -1115,8 +1223,8 @@ class BaselinkerService: ObservableObject {
         print("🔍 Rozpoczynam pobieranie szczegółowych danych produktów z katalogu ID=\(inventoryId)")
         print("📊 Łączna liczba produktów do pobrania: \(productIds.count)")
         
-        // Dzielimy produkty na partie po 100 sztuk, aby uniknąć przekroczenia limitów API
-        let batchSize = 100 // Zwiększamy rozmiar partii dla szybszego pobierania
+        // Dzielimy produkty na partie po 600 sztuk, aby uniknąć przekroczenia limitów API
+        let batchSize = 600 // Zwiększamy rozmiar partii dla znacznego zmniejszenia liczby zapytań
         let batches = stride(from: 0, to: productIds.count, by: batchSize).map {
             Array(productIds[$0..<min($0 + batchSize, productIds.count)])
         }
@@ -1204,8 +1312,8 @@ class BaselinkerService: ObservableObject {
         }
         
         // Dodajemy opóźnienie między żądaniami, aby uniknąć przekroczenia limitów API
-        // Zmniejszamy opóźnienie dla szybszego pobierania, ale wciąż unikamy limitów API
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        // Zwiększamy opóźnienie z 0.3 do 0.7 sekundy, aby lepiej respektować limit 100 zapytań/min
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
             guard let self = self else { return }
             
             self.sendRequest(parameters: parameters) { [weak self] success, responseData in
@@ -1268,7 +1376,10 @@ class BaselinkerService: ObservableObject {
     
     // Funkcja do obliczania dziennego podsumowania
     func calculateDailySummary() {
-        dailySummary = DailySummary(orders: orders, products: inventoryProducts)
+        let summary = DailySummary(orders: orders, products: inventoryProducts)
+        DispatchQueue.main.async {
+            self.dailySummary = summary
+        }
     }
     
     // Funkcja do uruchomienia automatycznego odświeżania podsumowania dziennego
@@ -1279,8 +1390,8 @@ class BaselinkerService: ObservableObject {
         // Oblicz podsumowanie od razu
         calculateDailySummary()
         
-        // Ustaw timer na odświeżanie co 60 sekund
-        summaryTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        // Ustaw timer na odświeżanie co 5 minut (300 sekund) zamiast co 60 sekund
+        summaryTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             self?.calculateDailySummary()
         }
     }
@@ -1289,5 +1400,146 @@ class BaselinkerService: ObservableObject {
     func stopDailySummaryAutoRefresh() {
         summaryTimer?.invalidate()
         summaryTimer = nil
+    }
+    
+    // Funkcja do uruchomienia automatycznego pobierania nowych zamówień (delta update)
+    func startDeltaUpdateAutoRefresh() {
+        // Zatrzymaj istniejący timer, jeśli istnieje
+        deltaUpdateTimer?.invalidate()
+        
+        // Pobierz nowe zamówienia od razu
+        deltaUpdateOrders()
+        
+        // Pobierz zapisaną częstotliwość synchronizacji lub użyj domyślnej wartości 30 sekund
+        let syncInterval = UserDefaults.standard.double(forKey: "syncIntervalInSeconds")
+        let interval = syncInterval > 0 ? syncInterval : 30.0
+        
+        // Ustaw timer na odświeżanie z określoną częstotliwością
+        deltaUpdateTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.deltaUpdateOrders()
+        }
+        
+        print("🔄 Uruchomiono automatyczne pobieranie nowych zamówień co \(interval) sekund")
+    }
+    
+    // Zatrzymaj automatyczne pobieranie nowych zamówień
+    func stopDeltaUpdateAutoRefresh() {
+        deltaUpdateTimer?.invalidate()
+        deltaUpdateTimer = nil
+        print("🛑 Zatrzymano automatyczne pobieranie nowych zamówień")
+    }
+    
+    // Aktualizacja częstotliwości synchronizacji
+    func updateSyncInterval(_ intervalInSeconds: Double) {
+        // Zatrzymaj istniejący timer
+        deltaUpdateTimer?.invalidate()
+        
+        // Ustaw nowy timer z nową częstotliwością
+        deltaUpdateTimer = Timer.scheduledTimer(withTimeInterval: intervalInSeconds, repeats: true) { [weak self] _ in
+            self?.deltaUpdateOrders()
+        }
+        
+        // Zapisz ustawienie w UserDefaults
+        UserDefaults.standard.set(intervalInSeconds, forKey: "syncIntervalInSeconds")
+        
+        print("🔄 Zaktualizowano częstotliwość synchronizacji na \(intervalInSeconds) sekund")
+    }
+    
+    // Funkcja do pobierania listy statusów zamówień
+    func fetchOrderStatusList() {
+        let parameters: [String: Any] = [
+            "method": "getOrderStatusList",
+            "parameters": [:]
+        ]
+        
+        sendRequest(parameters: parameters) { [weak self] success, responseData in
+            guard let self = self else { return }
+            
+            if success, let responseData = responseData {
+                do {
+                    if let jsonObject = try JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any],
+                       let status = jsonObject["status"] as? String, status == "SUCCESS",
+                       let statuses = jsonObject["statuses"] as? [[String: Any]] {
+                        
+                        var orderStatusList: [OrderStatusInfo] = []
+                        
+                        for statusData in statuses {
+                            if let id = statusData["id"] as? Int,
+                               let name = statusData["name"] as? String,
+                               let nameForCustomer = statusData["name_for_customer"] as? String {
+                                let color = statusData["color"] as? String ?? ""
+                                let statusInfo = OrderStatusInfo(
+                                    id: String(id),
+                                    name: name,
+                                    nameForCustomer: nameForCustomer,
+                                    color: color
+                                )
+                                orderStatusList.append(statusInfo)
+                            }
+                        }
+                        
+                        DispatchQueue.main.async {
+                            self.orderStatuses = orderStatusList
+                            print("Pobrano \(orderStatusList.count) statusów zamówień")
+                            
+                            // Aktualizujemy informacje o statusach dla istniejących zamówień
+                            self.updateOrderStatusInfo()
+                        }
+                    } else {
+                        print("❌ Błąd podczas pobierania statusów zamówień")
+                    }
+                } catch {
+                    print("❌ Błąd parsowania odpowiedzi: \(error.localizedDescription)")
+                }
+            } else {
+                print("❌ Błąd połączenia z API podczas pobierania statusów zamówień")
+            }
+        }
+    }
+    
+    // Funkcja do aktualizacji informacji o statusach dla istniejących zamówień
+    private func updateOrderStatusInfo() {
+        for i in 0..<orders.count {
+            if let statusInfo = getOrderStatusInfo(for: orders[i].status) {
+                orders[i].statusName = statusInfo.name
+                orders[i].statusColor = statusInfo.color
+            }
+        }
+    }
+    
+    // Funkcja do pobierania tylko nowych zamówień (delta update)
+    func deltaUpdateOrders() {
+        // Jeśli aktualnie trwa pobieranie, pomijamy
+        if isLoading {
+            print("🔄 Delta update: Pomijam, trwa już pobieranie zamówień")
+            return
+        }
+        
+        // Jeśli nie mamy żadnych zamówień, pobieramy wszystkie
+        if orders.isEmpty {
+            print("🔄 Delta update: Brak zamówień, pobieram wszystkie")
+            fetchOrders()
+            return
+        }
+        
+        DispatchQueue.main.async {
+            self.isLoading = true
+            self.error = nil
+            self.loadingOrdersProgress = "Pobieranie nowych zamówień..."
+        }
+        
+        // Znajdujemy najnowszą datę potwierdzenia wśród istniejących zamówień
+        if let latestOrder = orders.max(by: { $0.dateConfirmed < $1.dateConfirmed }) {
+            // Pobieramy zamówienia od daty potwierdzenia najnowszego zamówienia + 1 sekunda
+            let latestDate = latestOrder.dateConfirmed.addingTimeInterval(1)
+            print("🔄 Delta update: Pobieranie zamówień od daty: \(latestDate)")
+            
+            // Wywołujemy fetchOrdersBatch z datą najnowszego zamówienia jako lastConfirmedDate
+            fetchOrdersBatch(lastConfirmedDate: latestDate, isDeltaUpdate: true)
+        } else {
+            // Jeśli nie możemy znaleźć najnowszej daty, pobieramy wszystkie zamówienia
+            print("🔄 Delta update: Nie znaleziono daty potwierdzenia, pobieram wszystkie zamówienia")
+            fetchOrders()
+        }
     }
 } 

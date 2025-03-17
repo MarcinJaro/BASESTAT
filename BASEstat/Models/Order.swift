@@ -7,11 +7,14 @@
 
 import Foundation
 
-struct Order: Identifiable, Codable {
+struct Order: Identifiable, Codable, Hashable {
     var id: String
     var orderNumber: String
     var date: Date
+    var dateConfirmed: Date
     var status: String
+    var statusName: String?
+    var statusColor: String?
     var totalAmount: Double
     var currency: String
     var customerName: String
@@ -22,12 +25,22 @@ struct Order: Identifiable, Codable {
         case id = "order_id"
         case orderNumber = "order_number"
         case date = "date_add"
+        case dateConfirmed = "date_confirmed"
         case status = "order_status_id"
         case totalAmount = "price_total"
         case currency
         case customerName = "delivery_fullname"
-        case customerEmail = "email"
+        case customerEmail = "delivery_email"
         case items = "products"
+    }
+    
+    // Implementacja Hashable
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+    
+    static func == (lhs: Order, rhs: Order) -> Bool {
+        return lhs.id == rhs.id
     }
     
     init(from decoder: Decoder) throws {
@@ -93,6 +106,19 @@ struct Order: Identifiable, Codable {
             date = Date()
         }
         
+        // Obsługa daty potwierdzenia - API Baselinker zwraca timestamp jako string lub liczbę
+        if let dateString = try? container.decode(String.self, forKey: .dateConfirmed),
+           let dateTimestamp = Double(dateString) {
+            dateConfirmed = Date(timeIntervalSince1970: dateTimestamp)
+        } else if let dateTimestamp = try? container.decode(Double.self, forKey: .dateConfirmed) {
+            dateConfirmed = Date(timeIntervalSince1970: dateTimestamp)
+        } else if let dateTimestamp = try? container.decode(Int.self, forKey: .dateConfirmed) {
+            dateConfirmed = Date(timeIntervalSince1970: TimeInterval(dateTimestamp))
+        } else {
+            // Jeśli brak daty potwierdzenia, używamy daty dodania
+            dateConfirmed = date
+        }
+        
         // Dekodowanie produktów
         if let productsArray = try? container.decode([OrderItem].self, forKey: .items) {
             items = productsArray
@@ -107,7 +133,7 @@ struct Order: Identifiable, Codable {
     }
 }
 
-struct OrderItem: Identifiable, Codable {
+struct OrderItem: Identifiable, Codable, Hashable {
     var id: String
     var name: String
     var sku: String
@@ -122,6 +148,17 @@ struct OrderItem: Identifiable, Codable {
         case quantity = "quantity"
         case price = "price_brutto"
         case imageUrl = "image_url"
+    }
+    
+    // Implementacja Hashable
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(sku)
+    }
+    
+    static func == (lhs: OrderItem, rhs: OrderItem) -> Bool {
+        return lhs.id == rhs.id && lhs.name == rhs.name && lhs.sku == rhs.sku
     }
     
     init(from decoder: Decoder) throws {
@@ -194,5 +231,20 @@ enum OrderStatus: String, CaseIterable {
         case .completed: return "green"
         case .canceled: return "red"
         }
+    }
+}
+
+// Nowy model do przechowywania informacji o statusach zamówień z API
+struct OrderStatusInfo: Identifiable, Codable {
+    var id: String
+    var name: String
+    var nameForCustomer: String
+    var color: String
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case nameForCustomer = "name_for_customer"
+        case color
     }
 } 

@@ -22,7 +22,7 @@ struct DailySummaryBar: View {
                             .font(.caption)
                             .foregroundColor(.gray)
                         HStack {
-                            Text("\(summary.ordersCount)")
+                            Text("\(summary.orderCount)")
                                 .font(.headline)
                                 .fontWeight(.bold)
                             Image(systemName: "cart")
