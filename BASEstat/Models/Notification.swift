@@ -15,6 +15,9 @@ struct Notification: Identifiable {
     var type: NotificationType
     var isRead: Bool = false
     var relatedOrderId: String?
+    var orderAmount: Double?
+    var dailyOrderCount: Int?
+    var dailyOrderTotal: Double?
     
     static func sample() -> [Notification] {
         return [
@@ -67,5 +70,21 @@ enum NotificationType {
         case .error: return "red"
         case .info: return "gray"
         }
+    }
+}
+
+// Funkcja testowa do sprawdzenia, czy tworzenie powiadomień działa poprawnie
+extension Notification {
+    static func createTestNotification() -> Notification {
+        print("🔔 Tworzę testowe powiadomienie")
+        return Notification(
+            title: "Test powiadomienia", 
+            message: "To jest testowe powiadomienie z kwotą 100.00 zł",
+            date: Date(),
+            type: .newOrder,
+            orderAmount: 100.00,
+            dailyOrderCount: 5,
+            dailyOrderTotal: 1500.00
+        )
     }
 } 

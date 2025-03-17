@@ -1,0 +1,14 @@
+{
+  "Simulator Target Bundle": "com.example.BASEstat",
+  "aps": {
+    "alert": {
+      "title": "Nowe zamówienie",
+      "body": "Otrzymano nowe zamówienie #54321 - 249,99 zł\nDzisiaj: 5 zamówień, 1299.50 zł"
+    },
+    "sound": "cash-register.wav"
+  },
+  "orderId": "54321",
+  "orderAmount": 249.99,
+  "dailyOrderCount": 5,
+  "dailyOrderTotal": 1299.50
+}

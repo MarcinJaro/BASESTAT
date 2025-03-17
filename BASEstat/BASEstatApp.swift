@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UserNotifications
 
 @main
 struct BASEstatApp: App {
@@ -24,8 +25,12 @@ struct BASEstatApp: App {
                     // Pobierz dane produktów z magazynu
                     baselinkerService.fetchInventories()
                     
-                    // Rozpocznij monitorowanie nowych zamówień
-                    notificationService.startMonitoringForNewOrders(baselinkerService: baselinkerService)
+                    // Test powiadomień - używamy metody testowej z serwisu powiadomień
+                    print("🔔 Uruchamiam test powiadomień...")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        print("⏰ Czas na test powiadomień...")
+                        notificationService.testNotifications()
+                    }
                     
                     // Uruchamiamy automatyczne odświeżanie podsumowania dziennego
                     baselinkerService.startDailySummaryAutoRefresh()

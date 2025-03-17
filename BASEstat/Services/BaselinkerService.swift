@@ -1610,19 +1610,8 @@ class BaselinkerService: ObservableObject {
                             if !deletedOrderIds.isEmpty {
                                 print("🗑️ Wykryto \(deletedOrderIds.count) usuniętych zamówień: \(deletedOrderIds.joined(separator: ", "))")
                                 
-                                // Usuwamy zamówienia z lokalnej listy, ale zachowujemy zamówienia z bieżącego dnia
-                                DispatchQueue.main.async {
-                                    let calendar = Calendar.current
-                                    let startOfToday = calendar.startOfDay(for: Date())
-                                    
-                                    let initialCount = self.orders.count
-                                    self.orders.removeAll { order in
-                                        // Usuwamy tylko jeśli ID jest na liście usuniętych I zamówienie nie jest z dzisiejszego dnia
-                                        return deletedOrderIds.contains(order.id) && order.date < startOfToday
-                                    }
-                                    let removedCount = initialCount - self.orders.count
-                                    print("✅ Usunięto \(removedCount) zamówień z lokalnej listy (zachowano zamówienia z dzisiejszego dnia)")
-                                }
+                                // ZMIANA: Nie usuwamy zamówień z lokalnej listy, zachowujemy wszystkie
+                                print("⚠️ Zachowujemy wszystkie zamówienia w lokalnej bazie danych mimo wykrycia usuniętych zamówień w Baselinker")
                             } else {
                                 print("✅ Wszystkie sprawdzane zamówienia istnieją w Baselinker")
                             }
@@ -1630,19 +1619,8 @@ class BaselinkerService: ObservableObject {
                             // Brak zamówień w odpowiedzi - wszystkie zostały usunięte
                             print("🗑️ Wszystkie sprawdzane zamówienia zostały usunięte w Baselinker")
                             
-                            // Usuwamy wszystkie sprawdzane zamówienia z lokalnej listy, ale zachowujemy zamówienia z bieżącego dnia
-                            DispatchQueue.main.async {
-                                let calendar = Calendar.current
-                                let startOfToday = calendar.startOfDay(for: Date())
-                                
-                                let initialCount = self.orders.count
-                                self.orders.removeAll { order in
-                                    // Usuwamy tylko jeśli ID jest na liście sprawdzanych I zamówienie nie jest z dzisiejszego dnia
-                                    return recentOrderIds.contains(order.id) && order.date < startOfToday
-                                }
-                                let removedCount = initialCount - self.orders.count
-                                print("✅ Usunięto \(removedCount) zamówień z lokalnej listy (zachowano zamówienia z dzisiejszego dnia)")
-                            }
+                            // ZMIANA: Nie usuwamy zamówień z lokalnej listy, zachowujemy wszystkie
+                            print("⚠️ Zachowujemy wszystkie zamówienia w lokalnej bazie danych mimo wykrycia usuniętych zamówień w Baselinker")
                         }
                     } else {
                         // Próbujemy pobrać komunikat błędu z odpowiedzi
