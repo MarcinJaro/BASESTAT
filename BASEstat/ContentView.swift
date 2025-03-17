@@ -1143,7 +1143,7 @@ struct SettingsView: View {
     @State private var statusChangeNotificationsEnabled = true
     @State private var lowStockNotificationsEnabled = true
     @State private var darkModeEnabled = false
-    @State private var syncInterval = 15.0
+    @State private var syncInterval = 2.0
     @State private var isTestingConnection = false
     @State private var showConnectionAlert = false
     @State private var connectionAlertMessage = ""
@@ -1161,7 +1161,7 @@ struct SettingsView: View {
         _statusChangeNotificationsEnabled = State(initialValue: UserDefaults.standard.bool(forKey: "statusChangeNotificationsEnabled"))
         _lowStockNotificationsEnabled = State(initialValue: UserDefaults.standard.bool(forKey: "lowStockNotificationsEnabled"))
         _darkModeEnabled = State(initialValue: UserDefaults.standard.bool(forKey: "darkModeEnabled"))
-        _syncInterval = State(initialValue: UserDefaults.standard.double(forKey: "syncInterval") != 0 ? UserDefaults.standard.double(forKey: "syncInterval") : 15.0)
+        _syncInterval = State(initialValue: UserDefaults.standard.double(forKey: "syncInterval") != 0 ? UserDefaults.standard.double(forKey: "syncInterval") : 2.0)
     }
     
     var body: some View {
@@ -1237,7 +1237,11 @@ struct SettingsView: View {
                 Section(header: Text("Synchronizacja")) {
                     VStack {
                         Text("Częstotliwość synchronizacji: \(Int(syncInterval)) min")
-                        Slider(value: $syncInterval, in: 5...60, step: 5)
+                        Slider(value: $syncInterval, in: 1...30, step: 1)
+                            .onChange(of: syncInterval) { oldValue, newValue in
+                                UserDefaults.standard.set(Int(newValue), forKey: "backgroundRefreshInterval")
+                                print("Zmieniono częstotliwość odświeżania w tle na \(Int(newValue)) minut")
+                            }
                     }
                     
                     Button(action: {

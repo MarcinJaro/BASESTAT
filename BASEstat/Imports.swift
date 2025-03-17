@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import BackgroundTasks
 
 // Upewnij się, że ten plik jest importowany w każdym pliku, który wymaga dostępu do komponentów
 // Dodaj "import BASEstat" na początku każdego pliku, który potrzebuje dostępu do modeli
@@ -7,6 +8,7 @@ import Foundation
 // Eksportuj wszystkie komponenty i moduły, aby były dostępne po zaimportowaniu tego pliku
 @_exported import SwiftUI
 @_exported import Foundation
+@_exported import BackgroundTasks
 
 // Dodaj tutaj inne eksportowane moduły, jeśli są potrzebne
 #if canImport(UIKit)

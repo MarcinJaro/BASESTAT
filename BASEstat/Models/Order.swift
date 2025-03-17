@@ -165,11 +165,130 @@ struct OrderItem: Identifiable, Codable {
         // Dekodowanie URL obrazka
         imageUrl = try? container.decode(String.self, forKey: .imageUrl)
     }
+    
+    // Inicjalizator dla tworzenia OrderItem z parametrów
+    init(id: String, name: String, sku: String, quantity: Int, price: Double, imageUrl: String?) {
+        self.id = id
+        self.name = name
+        self.sku = sku
+        self.quantity = quantity
+        self.price = price
+        self.imageUrl = imageUrl
+    }
 }
 
 struct OrdersResponse: Codable {
     var status: String
     var orders: [Order]
+}
+
+// Inicjalizator dla Order z [String: Any]
+extension Order {
+    init?(from dict: [String: Any]) {
+        // Obsługa ID zamówienia
+        if let orderId = dict["order_id"] as? String {
+            id = orderId
+        } else if let orderIdInt = dict["order_id"] as? Int {
+            id = String(orderIdInt)
+        } else {
+            return nil // Nie można utworzyć zamówienia bez ID
+        }
+        
+        // Obsługa numeru zamówienia
+        if let orderNumber = dict["order_number"] as? String, !orderNumber.isEmpty {
+            self.orderNumber = orderNumber
+        } else if let orderNumberInt = dict["order_number"] as? Int {
+            self.orderNumber = String(orderNumberInt)
+        } else {
+            self.orderNumber = "BL-\(id)"
+        }
+        
+        // Obsługa statusu
+        if let status = dict["order_status_id"] as? String {
+            self.status = status
+        } else if let statusInt = dict["order_status_id"] as? Int {
+            self.status = String(statusInt)
+        } else {
+            self.status = "0"
+        }
+        
+        // Obsługa kwoty
+        if let amount = dict["price_total"] as? Double {
+            self.totalAmount = amount
+        } else if let amountString = dict["price_total"] as? String, let amount = Double(amountString) {
+            self.totalAmount = amount
+        } else if let amountInt = dict["price_total"] as? Int {
+            self.totalAmount = Double(amountInt)
+        } else {
+            self.totalAmount = 0.0
+        }
+        
+        // Obsługa waluty
+        self.currency = dict["currency"] as? String ?? "PLN"
+        
+        // Obsługa danych klienta
+        self.customerName = dict["delivery_fullname"] as? String ?? "Brak danych"
+        self.customerEmail = dict["email"] as? String ?? "Brak danych"
+        
+        // Obsługa daty
+        if let dateString = dict["date_add"] as? String, let dateTimestamp = Double(dateString) {
+            self.date = Date(timeIntervalSince1970: dateTimestamp)
+        } else if let dateTimestamp = dict["date_add"] as? Double {
+            self.date = Date(timeIntervalSince1970: dateTimestamp)
+        } else if let dateTimestamp = dict["date_add"] as? Int {
+            self.date = Date(timeIntervalSince1970: TimeInterval(dateTimestamp))
+        } else {
+            self.date = Date()
+        }
+        
+        // Obsługa produktów
+        if let productsArray = dict["products"] as? [[String: Any]] {
+            self.items = productsArray.compactMap { productDict -> OrderItem? in
+                var productId: String
+                if let idString = productDict["product_id"] as? String {
+                    productId = idString
+                } else if let idInt = productDict["product_id"] as? Int {
+                    productId = String(idInt)
+                } else {
+                    return nil
+                }
+                
+                let name = productDict["name"] as? String ?? "Brak nazwy"
+                let sku = productDict["sku"] as? String ?? ""
+                
+                let quantity: Int
+                if let quantityInt = productDict["quantity"] as? Int {
+                    quantity = quantityInt
+                } else if let quantityString = productDict["quantity"] as? String, let qty = Int(quantityString) {
+                    quantity = qty
+                } else {
+                    quantity = 1
+                }
+                
+                let price: Double
+                if let priceDouble = productDict["price_brutto"] as? Double {
+                    price = priceDouble
+                } else if let priceString = productDict["price_brutto"] as? String, let prc = Double(priceString) {
+                    price = prc
+                } else if let priceInt = productDict["price_brutto"] as? Int {
+                    price = Double(priceInt)
+                } else {
+                    price = 0.0
+                }
+                
+                let imageUrl = productDict["image_url"] as? String
+                
+                return OrderItem(id: productId, name: name, sku: sku, quantity: quantity, price: price, imageUrl: imageUrl)
+            }
+            
+            // Jeśli totalAmount jest 0, oblicz na podstawie produktów
+            if self.totalAmount == 0 {
+                self.totalAmount = self.items.reduce(0) { $0 + ($1.price * Double($1.quantity)) }
+            }
+        } else {
+            self.items = []
+        }
+    }
 }
 
 enum OrderStatus: String, CaseIterable {

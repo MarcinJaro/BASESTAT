@@ -351,7 +351,7 @@ class BaselinkerService: ObservableObject {
     private func fetchOrdersBatch(dateFrom: Date? = nil, dateTo: Date? = nil, statusId: String? = nil, idFrom: String? = nil) {
         // Tworzymy zagnieżdżony słownik parametrów
         var orderParameters: [String: Any] = [
-            "get_unconfirmed_orders": false, // Pobieramy tylko potwierdzone zamówienia
+            "get_unconfirmed_orders": true, // Pobieramy wszystkie zamówienia, również niepotwierdzone
         ]
         
         // Dodajemy opcjonalne parametry, jeśli zostały podane
@@ -400,6 +400,8 @@ class BaselinkerService: ObservableObject {
         request.httpMethod = "POST"
         request.addValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.addValue(apiToken, forHTTPHeaderField: "X-BLToken")
+        // Zwiększamy timeout dla żądań do 60 sekund
+        request.timeoutInterval = 60
         
         // Przygotowujemy dane w formacie application/x-www-form-urlencoded
         let requestBody = "method=getOrders&parameters=\(parametersString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
@@ -408,85 +410,105 @@ class BaselinkerService: ObservableObject {
         // Logujemy żądanie do debugowania
         logRequest(request, requestBody)
         
-        URLSession.shared.dataTaskPublisher(for: request)
-            .map(\.data)
-            .tryMap { data -> Data in
-                // Logujemy odpowiedź do debugowania
-                self.logResponse(data)
-                
-                // Sprawdzamy, czy odpowiedź zawiera błąd
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let errorMessage = json["error_message"] as? String {
-                    throw NSError(domain: "BaselinkerAPI", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+        // Funkcja do wykonania żądania z obsługą ponownych prób
+        func performRequest(retryCount: Int = 0, maxRetries: Int = 3) {
+            URLSession.shared.dataTaskPublisher(for: request)
+                .map(\.data)
+                .tryMap { data -> Data in
+                    // Logujemy odpowiedź do debugowania
+                    self.logResponse(data)
+                    
+                    // Sprawdzamy, czy odpowiedź zawiera błąd
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let errorMessage = json["error_message"] as? String {
+                        throw NSError(domain: "BaselinkerAPI", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+                    }
+                    
+                    return data
                 }
-                
-                return data
-            }
-            .receive(on: DispatchQueue.main)
-            .sink(receiveCompletion: { [weak self] completion in
-                if case .failure(let error) = completion {
-                    self?.isLoading = false
-                    self?.error = "Błąd pobierania danych: \(error.localizedDescription)"
-                    self?.connectionStatus = .failed(error.localizedDescription)
-                }
-            }, receiveValue: { [weak self] data in
-                // Ręczne parsowanie JSON zamiast używania dekodera
-                do {
-                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let status = json["status"] as? String,
-                       status == "SUCCESS" {
+                .receive(on: DispatchQueue.main)
+                .sink(receiveCompletion: { [weak self] completion in
+                    if case .failure(let error) = completion {
+                        // Sprawdzamy, czy to timeout lub inny błąd sieciowy
+                        let nsError = error as NSError
+                        let timeoutCodes = [-1001, -1003, -1005]
                         
-                        if let ordersArray = json["orders"] as? [[String: Any]] {
-                            // Debugowanie - wyświetl pierwsze zamówienie
-                            if let firstOrder = ordersArray.first {
-                                self?.debugFirstOrder(firstOrder)
+                        // Jeśli to timeout i nie przekroczyliśmy maksymalnej liczby prób
+                        if (timeoutCodes.contains(nsError.code) || nsError.domain == "BaselinkerAPI") && retryCount < maxRetries {
+                            print("⚠️ Błąd podczas pobierania zamówień. Ponawiam próbę \(retryCount + 1)/\(maxRetries)...")
+                            // Czekamy coraz dłużej przed kolejną próbą (backoff)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                                performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
                             }
+                            return
+                        }
+                        
+                        self?.isLoading = false
+                        self?.error = "Błąd pobierania danych: \(error.localizedDescription)"
+                        self?.connectionStatus = .failed(error.localizedDescription)
+                    }
+                }, receiveValue: { [weak self] data in
+                    // Ręczne parsowanie JSON zamiast używania dekodera
+                    do {
+                        if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let status = json["status"] as? String,
+                           status == "SUCCESS" {
                             
-                            let decoder = JSONDecoder()
-                            
-                            // Konwertujemy słownik zamówień z powrotem do JSON i dekodujemy
-                            let ordersData = try JSONSerialization.data(withJSONObject: ordersArray)
-                            let newOrders = try decoder.decode([Order].self, from: ordersData)
-                            
-                            // Dodajemy nowe zamówienia do istniejącej listy na głównym wątku
-                            DispatchQueue.main.async {
-                                self?.orders.append(contentsOf: newOrders)
-                                self?.connectionStatus = .connected
-                                self?.error = nil
-                            }
-                            
-                            // Sprawdzamy, czy otrzymaliśmy maksymalną liczbę zamówień (100)
-                            // Jeśli tak, to pobieramy kolejną partię
-                            if newOrders.count == 100, let lastOrderId = newOrders.last?.id {
-                                // Pobieramy kolejną partię zamówień, zaczynając od ID ostatniego zamówienia
-                                self?.fetchOrdersBatch(dateFrom: dateFrom, dateTo: dateTo, statusId: statusId, idFrom: lastOrderId)
+                            if let ordersArray = json["orders"] as? [[String: Any]] {
+                                // Debugowanie - wyświetl pierwsze zamówienie
+                                if let firstOrder = ordersArray.first {
+                                    self?.debugFirstOrder(firstOrder)
+                                }
+                                
+                                let decoder = JSONDecoder()
+                                
+                                // Konwertujemy słownik zamówień z powrotem do JSON i dekodujemy
+                                let ordersData = try JSONSerialization.data(withJSONObject: ordersArray)
+                                let newOrders = try decoder.decode([Order].self, from: ordersData)
+                                
+                                // Dodajemy nowe zamówienia do istniejącej listy na głównym wątku
+                                DispatchQueue.main.async {
+                                    self?.orders.append(contentsOf: newOrders)
+                                    self?.connectionStatus = .connected
+                                    self?.error = nil
+                                }
+                                
+                                // Sprawdzamy, czy otrzymaliśmy maksymalną liczbę zamówień (100)
+                                // Jeśli tak, to pobieramy kolejną partię
+                                if newOrders.count == 100, let lastOrderId = newOrders.last?.id {
+                                    // Pobieramy kolejną partię zamówień, zaczynając od ID ostatniego zamówienia
+                                    self?.fetchOrdersBatch(dateFrom: dateFrom, dateTo: dateTo, statusId: statusId, idFrom: lastOrderId)
+                                } else {
+                                    // Zakończyliśmy pobieranie wszystkich zamówień
+                                    self?.isLoading = false
+                                    
+                                    // Sortujemy zamówienia od najnowszych do najstarszych
+                                    self?.orders.sort { $0.date > $1.date }
+                                    
+                                    print("Pobrano łącznie \(self?.orders.count ?? 0) zamówień")
+                                }
                             } else {
-                                // Zakończyliśmy pobieranie wszystkich zamówień
                                 self?.isLoading = false
-                                
-                                // Sortujemy zamówienia od najnowszych do najstarszych
-                                self?.orders.sort { $0.date > $1.date }
-                                
-                                print("Pobrano łącznie \(self?.orders.count ?? 0) zamówień")
+                                self?.error = "Brak danych o zamówieniach w odpowiedzi"
+                                self?.connectionStatus = .failed("Brak danych o zamówieniach")
                             }
                         } else {
                             self?.isLoading = false
-                            self?.error = "Brak danych o zamówieniach w odpowiedzi"
-                            self?.connectionStatus = .failed("Brak danych o zamówieniach")
+                            self?.error = "Nieprawidłowa odpowiedź API"
+                            self?.connectionStatus = .failed("Nieprawidłowa odpowiedź API")
                         }
-                    } else {
+                    } catch {
                         self?.isLoading = false
-                        self?.error = "Nieprawidłowa odpowiedź API"
-                        self?.connectionStatus = .failed("Nieprawidłowa odpowiedź API")
+                        print("Błąd parsowania JSON: \(error)")
+                        self?.error = "Błąd parsowania danych: \(error.localizedDescription)"
+                        self?.connectionStatus = .failed(error.localizedDescription)
                     }
-                } catch {
-                    self?.isLoading = false
-                    print("Błąd parsowania JSON: \(error)")
-                    self?.error = "Błąd parsowania danych: \(error.localizedDescription)"
-                    self?.connectionStatus = .failed(error.localizedDescription)
-                }
-            })
-            .store(in: &cancellables)
+                })
+                .store(in: &cancellables)
+        }
+        
+        // Rozpoczynamy wykonanie żądania z obsługą ponownych prób
+        performRequest()
     }
     
     // Funkcja pomocnicza do wysyłania żądań API
@@ -519,6 +541,8 @@ class BaselinkerService: ObservableObject {
         request.httpMethod = "POST"
         request.addValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.addValue(apiToken, forHTTPHeaderField: "X-BLToken")
+        // Zwiększamy timeout dla żądań do 60 sekund
+        request.timeoutInterval = 60
         
         // Przygotowujemy dane w formacie application/x-www-form-urlencoded
         let requestBody = "method=\(method)&parameters=\(parametersJSONString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
@@ -527,29 +551,50 @@ class BaselinkerService: ObservableObject {
         // Logujemy żądanie do debugowania
         logRequest(request, requestBody)
         
-        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                print("❌ Błąd sieciowy: \(error.localizedDescription)")
-                completion(false, nil)
-                return
+        // Funkcja do wykonania żądania z obsługą ponownych prób
+        func performRequest(retryCount: Int = 0, maxRetries: Int = 3) {
+            let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+                guard let self = self else { return }
+                
+                // Sprawdzamy, czy wystąpił timeout lub inny błąd sieciowy
+                if let error = error {
+                    let nsError = error as NSError
+                    // Kody błędów dla timeoutów
+                    let timeoutCodes = [-1001, -1003, -1005]
+                    
+                    // Jeśli to timeout i nie przekroczyliśmy maksymalnej liczby prób
+                    if timeoutCodes.contains(nsError.code) && retryCount < maxRetries {
+                        print("⚠️ Timeout podczas żądania API (\(method)). Ponawiam próbę \(retryCount + 1)/\(maxRetries)...")
+                        // Czekamy coraz dłużej przed kolejną próbą (backoff)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                            performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                        }
+                        return
+                    }
+                    
+                    print("❌ Błąd sieciowy: \(error.localizedDescription)")
+                    completion(false, nil)
+                    return
+                }
+                
+                guard let data = data else {
+                    print("❌ Brak danych w odpowiedzi")
+                    completion(false, nil)
+                    return
+                }
+                
+                // Logujemy odpowiedź do debugowania
+                self.logResponse(data)
+                
+                // Zwracamy sukces i dane
+                completion(true, data)
             }
             
-            guard let data = data else {
-                print("❌ Brak danych w odpowiedzi")
-                completion(false, nil)
-                return
-            }
-            
-            // Logujemy odpowiedź do debugowania
-            self.logResponse(data)
-            
-            // Zwracamy sukces i dane
-            completion(true, data)
+            task.resume()
         }
         
-        task.resume()
+        // Rozpoczynamy wykonanie żądania z obsługą ponownych prób
+        performRequest()
     }
     
     // Funkcja pomocnicza do debugowania pierwszego zamówienia
@@ -1289,5 +1334,334 @@ class BaselinkerService: ObservableObject {
     func stopDailySummaryAutoRefresh() {
         summaryTimer?.invalidate()
         summaryTimer = nil
+    }
+    
+    // MARK: - Background Tasks
+    
+    // Funkcja do pobierania daty początkowej dla zamówień (30 dni wstecz)
+    private func getDateFrom() -> Int {
+        // Zwracamy timestamp sprzed 30 dni (w sekundach)
+        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        return Int(thirtyDaysAgo.timeIntervalSince1970)
+    }
+    
+    // Funkcja do pobierania zamówień w tle
+    func fetchOrdersInBackground(completion: @escaping (Bool) -> Void) {
+        guard connectionStatus.isConnected else {
+            print("❌ Brak połączenia z API podczas próby odświeżenia w tle")
+            completion(false)
+            return
+        }
+        
+        let currentTime = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        print("🔄 [\(currentTime)] Rozpoczęto pobieranie zamówień w tle...")
+        
+        let parameters: [String: Any] = [
+            "method": "getOrders",
+            "parameters": [
+                "date_from": getDateFrom(),
+                "status_id": "all",
+                "include_custom_extra_fields": true,
+                "get_unconfirmed_orders": true
+            ]
+        ]
+        
+        // Funkcja do wykonania żądania z obsługą ponownych prób
+        func performRequest(retryCount: Int = 0, maxRetries: Int = 3) {
+            sendRequest(parameters: parameters) { [weak self] success, responseData in
+                guard let self = self else {
+                    print("❌ Błąd: Obiekt BaselinkerService został zwolniony podczas pobierania danych")
+                    completion(false)
+                    return
+                }
+                
+                let completionTime = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+                
+                if success, let responseData = responseData {
+                    do {
+                        if let json = try JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any],
+                           let status = json["status"] as? String, status == "SUCCESS" {
+                            
+                            if let ordersDict = json["orders"] as? [[String: Any]] {
+                                print("✅ [\(completionTime)] Pobrano \(ordersDict.count) zamówień w tle")
+                                
+                                // Przetwarzamy zamówienia w tle
+                                let newOrders = ordersDict.compactMap { Order(from: $0) }
+                                
+                                // Aktualizujemy dane w głównym wątku
+                                DispatchQueue.main.async {
+                                    self.orders = newOrders
+                                    self.calculateDailySummary()
+                                    print("✅ Zaktualizowano dane zamówień i podsumowanie dzienne")
+                                    completion(true)
+                                }
+                            } else {
+                                print("❌ [\(completionTime)] Brak zamówień w odpowiedzi lub nieprawidłowy format odpowiedzi")
+                                completion(false)
+                            }
+                        } else {
+                            let errorMessage = (try? JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any])?["error_message"] as? String ?? "Nieznany błąd"
+                            print("❌ Błąd API: \(errorMessage)")
+                            
+                            // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                            if retryCount < maxRetries {
+                                print("⚠️ Ponawiam próbę pobierania zamówień w tle \(retryCount + 1)/\(maxRetries)...")
+                                // Czekamy coraz dłużej przed kolejną próbą (backoff)
+                                DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                                    performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                                }
+                                return
+                            }
+                            
+                            completion(false)
+                        }
+                    } catch {
+                        print("❌ Błąd podczas przetwarzania odpowiedzi: \(error.localizedDescription)")
+                        
+                        // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                        if retryCount < maxRetries {
+                            print("⚠️ Ponawiam próbę pobierania zamówień w tle \(retryCount + 1)/\(maxRetries)...")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                                performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                            }
+                            return
+                        }
+                        
+                        completion(false)
+                    }
+                } else {
+                    print("❌ Błąd połączenia z API")
+                    
+                    // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                    if retryCount < maxRetries {
+                        print("⚠️ Ponawiam próbę pobierania zamówień w tle \(retryCount + 1)/\(maxRetries)...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                            performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                        }
+                        return
+                    }
+                    
+                    completion(false)
+                }
+            }
+        }
+        
+        // Rozpoczynamy wykonanie żądania z obsługą ponownych prób
+        performRequest()
+    }
+    
+    // Funkcja do pobierania magazynów w tle
+    func fetchInventoriesInBackground(completion: @escaping (Bool) -> Void) {
+        guard connectionStatus.isConnected else {
+            print("❌ Brak połączenia z API podczas próby odświeżenia magazynów w tle")
+            completion(false)
+            return
+        }
+        
+        print("🔄 Pobieranie magazynów w tle...")
+        
+        let parameters: [String: Any] = [
+            "method": "getInventories",
+            "parameters": [:]
+        ]
+        
+        // Funkcja do wykonania żądania z obsługą ponownych prób
+        func performRequest(retryCount: Int = 0, maxRetries: Int = 3) {
+            sendRequest(parameters: parameters) { [weak self] success, responseData in
+                guard let self = self else {
+                    completion(false)
+                    return
+                }
+                
+                if success, let responseData = responseData {
+                    do {
+                        if let json = try JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any],
+                           let status = json["status"] as? String, status == "SUCCESS" {
+                            
+                            if let inventoriesDict = json["inventories"] as? [[String: Any]] {
+                                print("✅ Pobrano \(inventoriesDict.count) magazynów w tle")
+                                
+                                // Jeśli mamy magazyny, pobieramy produkty z pierwszego magazynu
+                                if let firstInventory = inventoriesDict.first, let inventoryId = firstInventory["inventory_id"] as? String {
+                                    // Pobieramy produkty z pierwszego magazynu
+                                    self.fetchInventoryProductsInBackground(inventoryId: inventoryId) { success in
+                                        completion(success)
+                                    }
+                                } else {
+                                    print("❌ Brak magazynów w odpowiedzi")
+                                    completion(false)
+                                }
+                            } else {
+                                print("❌ Brak magazynów w odpowiedzi lub nieprawidłowy format odpowiedzi")
+                                
+                                // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                                if retryCount < maxRetries {
+                                    print("⚠️ Ponawiam próbę pobierania magazynów w tle \(retryCount + 1)/\(maxRetries)...")
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                                        performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                                    }
+                                    return
+                                }
+                                
+                                completion(false)
+                            }
+                        } else {
+                            let errorMessage = (try? JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any])?["error_message"] as? String ?? "Nieznany błąd"
+                            print("❌ Błąd API: \(errorMessage)")
+                            
+                            // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                            if retryCount < maxRetries {
+                                print("⚠️ Ponawiam próbę pobierania magazynów w tle \(retryCount + 1)/\(maxRetries)...")
+                                DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                                    performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                                }
+                                return
+                            }
+                            
+                            completion(false)
+                        }
+                    } catch {
+                        print("❌ Błąd podczas przetwarzania odpowiedzi: \(error.localizedDescription)")
+                        
+                        // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                        if retryCount < maxRetries {
+                            print("⚠️ Ponawiam próbę pobierania magazynów w tle \(retryCount + 1)/\(maxRetries)...")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                                performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                            }
+                            return
+                        }
+                        
+                        completion(false)
+                    }
+                } else {
+                    print("❌ Błąd połączenia z API")
+                    
+                    // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                    if retryCount < maxRetries {
+                        print("⚠️ Ponawiam próbę pobierania magazynów w tle \(retryCount + 1)/\(maxRetries)...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                            performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                        }
+                        return
+                    }
+                    
+                    completion(false)
+                }
+            }
+        }
+        
+        // Rozpoczynamy wykonanie żądania z obsługą ponownych prób
+        performRequest()
+    }
+    
+    // Funkcja do pobierania produktów z magazynu w tle
+    private func fetchInventoryProductsInBackground(inventoryId: String, completion: @escaping (Bool) -> Void) {
+        print("🔄 Pobieranie produktów z magazynu \(inventoryId) w tle...")
+        
+        // Pobieramy tylko podstawowe informacje o produktach w tle
+        let parameters: [String: Any] = [
+            "method": "getInventoryProductsList",
+            "parameters": [
+                "inventory_id": inventoryId,
+                "page": 1
+            ]
+        ]
+        
+        // Funkcja do wykonania żądania z obsługą ponownych prób
+        func performRequest(retryCount: Int = 0, maxRetries: Int = 3) {
+            sendRequest(parameters: parameters) { [weak self] success, responseData in
+                guard let self = self else {
+                    completion(false)
+                    return
+                }
+                
+                if success, let responseData = responseData {
+                    do {
+                        if let json = try JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any],
+                           let status = json["status"] as? String, status == "SUCCESS" {
+                            
+                            if let productsDict = json["products"] as? [String: [String: Any]] {
+                                print("✅ Znaleziono \(productsDict.count) produktów w katalogu w tle")
+                                
+                                // W tle pobieramy tylko podstawowe informacje o produktach
+                                // Nie pobieramy szczegółowych danych, aby oszczędzić czas i zasoby
+                                var products: [InventoryProduct] = []
+                                
+                                for (productId, productData) in productsDict {
+                                    var productDataWithId = productData
+                                    productDataWithId["id"] = productId
+                                    
+                                    let product = InventoryProduct(from: productDataWithId)
+                                    products.append(product)
+                                }
+                                
+                                // Aktualizujemy dane w głównym wątku
+                                DispatchQueue.main.async {
+                                    self.inventoryProducts = products
+                                    completion(true)
+                                }
+                            } else {
+                                print("❌ Brak produktów w odpowiedzi lub nieprawidłowy format odpowiedzi")
+                                
+                                // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                                if retryCount < maxRetries {
+                                    print("⚠️ Ponawiam próbę pobierania produktów w tle \(retryCount + 1)/\(maxRetries)...")
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                                        performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                                    }
+                                    return
+                                }
+                                
+                                completion(false)
+                            }
+                        } else {
+                            let errorMessage = (try? JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any])?["error_message"] as? String ?? "Nieznany błąd"
+                            print("❌ Błąd API: \(errorMessage)")
+                            
+                            // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                            if retryCount < maxRetries {
+                                print("⚠️ Ponawiam próbę pobierania produktów w tle \(retryCount + 1)/\(maxRetries)...")
+                                DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                                    performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                                }
+                                return
+                            }
+                            
+                            completion(false)
+                        }
+                    } catch {
+                        print("❌ Błąd podczas przetwarzania odpowiedzi: \(error.localizedDescription)")
+                        
+                        // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                        if retryCount < maxRetries {
+                            print("⚠️ Ponawiam próbę pobierania produktów w tle \(retryCount + 1)/\(maxRetries)...")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                                performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                            }
+                            return
+                        }
+                        
+                        completion(false)
+                    }
+                } else {
+                    print("❌ Błąd połączenia z API")
+                    
+                    // Jeśli nie przekroczyliśmy maksymalnej liczby prób, próbujemy ponownie
+                    if retryCount < maxRetries {
+                        print("⚠️ Ponawiam próbę pobierania produktów w tle \(retryCount + 1)/\(maxRetries)...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + Double(retryCount + 1) * 2) {
+                            performRequest(retryCount: retryCount + 1, maxRetries: maxRetries)
+                        }
+                        return
+                    }
+                    
+                    completion(false)
+                }
+            }
+        }
+        
+        // Rozpoczynamy wykonanie żądania z obsługą ponownych prób
+        performRequest()
     }
 } 

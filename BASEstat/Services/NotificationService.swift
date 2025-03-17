@@ -210,4 +210,44 @@ class NotificationService: ObservableObject {
             }
         }
     }
+    
+    // MARK: - Background Tasks
+    
+    func checkForNewOrdersInBackground(baselinkerService: BaselinkerService) {
+        // Sprawdź, czy powiadomienia są włączone
+        let notificationsEnabled = UserDefaults.standard.bool(forKey: "notificationsEnabled")
+        let newOrdersNotificationsEnabled = UserDefaults.standard.bool(forKey: "newOrdersNotificationsEnabled")
+        
+        if !notificationsEnabled || !newOrdersNotificationsEnabled {
+            print("❌ Powiadomienia o nowych zamówieniach są wyłączone")
+            return
+        }
+        
+        // Pobierz podsumowanie dzienne
+        let todaySummary = baselinkerService.getTodaySummary()
+        
+        // Sprawdź, czy są nowe zamówienia
+        if todaySummary.newOrdersCount > 0 {
+            print("✅ Wykryto \(todaySummary.newOrdersCount) nowych zamówień podczas sprawdzania w tle")
+            
+            // Tworzenie wiadomości z dodatkowymi informacjami
+            let message = """
+            Otrzymano \(todaySummary.newOrdersCount) nowych zamówień
+            
+            Dzisiaj: \(todaySummary.orderCount) zamówień o łącznej wartości \(String(format: "%.2f zł", todaySummary.totalValue))
+            """
+            
+            let newNotification = Notification(
+                title: "Nowe zamówienia",
+                message: message,
+                date: Date(),
+                type: .newOrder
+            )
+            
+            // Dodaj powiadomienie
+            self.addNotification(newNotification)
+        } else {
+            print("✅ Brak nowych zamówień podczas sprawdzania w tle")
+        }
+    }
 } 
