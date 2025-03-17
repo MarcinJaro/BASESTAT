@@ -566,6 +566,12 @@ class BaselinkerService: ObservableObject {
                             self.loadingOrdersProgress = "Pobrano wszystkie zamówienia: \(self.orders.count)"
                             print("Zakończono pobieranie wszystkich zamówień. Łącznie: \(self.orders.count)")
                         }
+                        
+                        // Po zakończeniu aktualizacji, odświeżamy widok podsumowania dziennego
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            self.objectWillChange.send()
+                            print("🔄 Odświeżono widok podsumowania dziennego po pobraniu zamówień")
+                        }
                     }
                 } else {
                     // Wszystkie zamówienia zostały pobrane
@@ -583,6 +589,12 @@ class BaselinkerService: ObservableObject {
                     } else {
                         self.loadingOrdersProgress = "Pobrano wszystkie zamówienia: \(self.orders.count)"
                         print("Zakończono pobieranie wszystkich zamówień. Łącznie: \(self.orders.count)")
+                    }
+                    
+                    // Po zakończeniu aktualizacji, odświeżamy widok podsumowania dziennego
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        self.objectWillChange.send()
+                        print("🔄 Odświeżono widok podsumowania dziennego po pobraniu zamówień")
                     }
                 }
             })
@@ -854,38 +866,47 @@ class BaselinkerService: ObservableObject {
         }
         
         // Odwracamy, aby najstarszy dzień był pierwszy
-        return days.reversed().map { (day: $0.day, value: $0.value, date: $0.date) }
+        let result = days.reversed().map { (day: $0.day, value: $0.value, date: $0.date) }
+        
+        // Wyświetlamy informacje o danych sprzedaży
+        print("📊 Dane sprzedaży z ostatnich 7 dni:")
+        for (index, day) in result.enumerated() {
+            print("\(index + 1). \(day.day): \(day.value) zł")
+        }
+        
+        return result
     }
     
     // Funkcja zwracająca podsumowanie aktualnego dnia
     func getTodaySummary() -> (orderCount: Int, totalValue: Double, newOrdersCount: Int, topProducts: [(name: String, quantity: Int, id: String, imageUrl: String?)]) {
         let calendar = Calendar.current
         let now = Date()
-        let yesterday = calendar.date(byAdding: .hour, value: -24, to: now)!
+        // Zamiast ostatnich 24h, bierzemy początek bieżącego dnia
+        let startOfToday = calendar.startOfDay(for: now)
         
-        // Filtrujemy zamówienia z ostatnich 24 godzin zamiast tylko z dzisiejszego dnia
+        // Filtrujemy zamówienia tylko z bieżącego dnia
         let todayOrders = orders.filter { order in
-            return order.date >= yesterday && order.date <= now
+            return order.date >= startOfToday && order.date <= now
         }
         
-        // Jeśli nie ma żadnych zamówień z ostatnich 24 godzin, generujemy dane testowe
-        if todayOrders.isEmpty && orders.isEmpty {
-            print("📊 Brak zamówień z ostatnich 24h - generuję dane testowe")
-            return generateTestData()
+        // Jeśli nie ma żadnych zamówień z bieżącego dnia, zwracamy zerowe wartości
+        if todayOrders.isEmpty {
+            print("📊 Brak zamówień z bieżącego dnia - zwracam zerowe wartości")
+            return (orderCount: 0, totalValue: 0.0, newOrdersCount: 0, topProducts: [])
         }
         
-        print("📊 Znaleziono \(todayOrders.count) zamówień z ostatnich 24h")
+        print("📊 Znaleziono \(todayOrders.count) zamówień z bieżącego dnia")
         
-        // Liczba zamówień z ostatnich 24 godzin
+        // Liczba zamówień z bieżącego dnia
         let orderCount = todayOrders.count
         
-        // Całkowita wartość zamówień z ostatnich 24 godzin
+        // Całkowita wartość zamówień z bieżącego dnia
         let totalValue = todayOrders.reduce(0) { $0 + $1.totalAmount }
         
-        // Liczba nowych zamówień z ostatnich 24 godzin
+        // Liczba nowych zamówień z bieżącego dnia
         let newOrdersCount = todayOrders.filter { $0.status == OrderStatus.new.rawValue }.count
         
-        // Najlepiej sprzedające się produkty z ostatnich 24 godzin
+        // Najlepiej sprzedające się produkty z bieżącego dnia
         var productQuantities: [String: (quantity: Int, id: String, sku: String, imageUrl: String?)] = [:]
         
         for order in todayOrders {
@@ -907,7 +928,7 @@ class BaselinkerService: ObservableObject {
             }
         }
         
-        print("🔍 Znaleziono \(productQuantities.count) produktów w zamówieniach z ostatnich 24h")
+        print("🔍 Znaleziono \(productQuantities.count) produktów w zamówieniach z bieżącego dnia")
         print("📊 Liczba produktów w magazynie: \(inventoryProducts.count)")
         
         // Próbujemy znaleźć odpowiadające produkty w magazynie, aby użyć ich obrazków
@@ -943,35 +964,12 @@ class BaselinkerService: ObservableObject {
             .map { (name: $0.key, quantity: $0.value.quantity, id: $0.value.id, imageUrl: $0.value.imageUrl) }
         
         // Wyświetlamy informacje o wynikowych produktach
-        print("📋 Najlepiej sprzedające się produkty z ostatnich 24h:")
+        print("📋 Najlepiej sprzedające się produkty z bieżącego dnia:")
         for (index, product) in topProducts.enumerated() {
             print("\(index + 1). \(product.name) (\(product.quantity) szt.) - URL obrazka: \(product.imageUrl ?? "brak")")
         }
         
         return (orderCount: orderCount, totalValue: totalValue, newOrdersCount: newOrdersCount, topProducts: topProducts)
-    }
-    
-    // Funkcja generująca dane testowe
-    func generateTestData() -> (orderCount: Int, totalValue: Double, newOrdersCount: Int, topProducts: [(name: String, quantity: Int, id: String, imageUrl: String?)]) {
-        let orderCount = 15
-        let totalValue = 2345.67
-        let newOrdersCount = 2
-        
-        // Używamy rzeczywistych adresów URL obrazków z internetu
-        let topProducts: [(name: String, quantity: Int, id: String, imageUrl: String?)] = [
-            ("Smartfon XYZ", 12, "prod1", "https://cdn.pixabay.com/photo/2016/11/29/12/30/phone-1869510_1280.jpg"),
-            ("Słuchawki bezprzewodowe", 8, "prod2", "https://cdn.pixabay.com/photo/2018/09/17/14/27/headphones-3683983_1280.jpg"),
-            ("Powerbank 10000mAh", 6, "prod3", "https://cdn.pixabay.com/photo/2014/08/05/10/30/iphone-410324_1280.jpg"),
-            ("Etui ochronne", 5, "prod4", "https://cdn.pixabay.com/photo/2015/02/02/15/28/office-620822_1280.jpg"),
-            ("Ładowarka USB-C", 4, "prod5", "https://cdn.pixabay.com/photo/2014/04/05/11/38/cable-316288_1280.jpg")
-        ]
-        
-        print("📊 Wygenerowano testowe dane z rzeczywistymi URL-ami obrazków")
-        for (index, product) in topProducts.enumerated() {
-            print("\(index + 1). \(product.name) (\(product.quantity) szt.) - URL obrazka: \(product.imageUrl ?? "brak")")
-        }
-        
-        return (orderCount, totalValue, newOrdersCount, topProducts)
     }
     
     // MARK: - Metody do obsługi produktów z magazynu
@@ -1536,10 +1534,137 @@ class BaselinkerService: ObservableObject {
             
             // Wywołujemy fetchOrdersBatch z datą najnowszego zamówienia jako lastConfirmedDate
             fetchOrdersBatch(lastConfirmedDate: latestDate, isDeltaUpdate: true)
+            
+            // Sprawdzamy, czy jakieś zamówienia zostały usunięte w Baselinker
+            checkForDeletedOrders()
+            
+            // Po zakończeniu aktualizacji, odświeżamy widok podsumowania dziennego
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.objectWillChange.send()
+                print("🔄 Delta update: Odświeżono widok podsumowania dziennego")
+            }
         } else {
             // Jeśli nie możemy znaleźć najnowszej daty, pobieramy wszystkie zamówienia
             print("🔄 Delta update: Nie znaleziono daty potwierdzenia, pobieram wszystkie zamówienia")
             fetchOrders()
+            
+            // Po zakończeniu aktualizacji, odświeżamy widok podsumowania dziennego
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.objectWillChange.send()
+                print("🔄 Delta update: Odświeżono widok podsumowania dziennego")
+            }
+        }
+    }
+    
+    // Funkcja do sprawdzania, czy jakieś zamówienia zostały usunięte w Baselinker
+    private func checkForDeletedOrders() {
+        // Sortujemy zamówienia od najnowszych do najstarszych
+        let sortedOrders = orders.sorted { $0.dateConfirmed > $1.dateConfirmed }
+        
+        // Bierzemy tylko ostatnie 100 zamówień (lub mniej, jeśli mamy mniej zamówień)
+        let recentOrders = Array(sortedOrders.prefix(100))
+        let recentOrderIds = recentOrders.map { $0.id }
+        
+        if recentOrderIds.isEmpty {
+            print("🔍 Brak zamówień do sprawdzenia")
+            return
+        }
+        
+        print("🔍 Sprawdzanie usuniętych zamówień: sprawdzam \(recentOrderIds.count) najnowszych zamówień")
+        
+        // Tworzymy parametry żądania - sprawdzamy wszystkie ID jednocześnie
+        let requestParameters: [String: Any] = [
+            "order_id": recentOrderIds.joined(separator: "|")
+        ]
+        
+        let parameters: [String: Any] = [
+            "method": "getOrders",
+            "parameters": requestParameters
+        ]
+        
+        sendRequest(parameters: parameters) { [weak self] success, responseData in
+            guard let self = self else { return }
+            
+            if success, let responseData = responseData {
+                do {
+                    if let jsonObject = try JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any],
+                       let status = jsonObject["status"] as? String, status == "SUCCESS" {
+                        
+                        // Pobieramy ID zamówień, które istnieją w Baselinker
+                        let existingOrderIds: Set<String>
+                        
+                        if let ordersData = jsonObject["orders"] as? [[String: Any]] {
+                            // Pobieramy ID zamówień, które istnieją w Baselinker
+                            existingOrderIds = Set(ordersData.compactMap { orderData -> String? in
+                                if let orderId = orderData["order_id"] as? String {
+                                    return orderId
+                                } else if let orderId = orderData["order_id"] as? Int {
+                                    return String(orderId)
+                                }
+                                return nil
+                            })
+                            
+                            // Znajdujemy ID zamówień, które nie istnieją już w Baselinker
+                            let deletedOrderIds = Set(recentOrderIds).subtracting(existingOrderIds)
+                            
+                            if !deletedOrderIds.isEmpty {
+                                print("🗑️ Wykryto \(deletedOrderIds.count) usuniętych zamówień: \(deletedOrderIds.joined(separator: ", "))")
+                                
+                                // Usuwamy zamówienia z lokalnej listy, ale zachowujemy zamówienia z bieżącego dnia
+                                DispatchQueue.main.async {
+                                    let calendar = Calendar.current
+                                    let startOfToday = calendar.startOfDay(for: Date())
+                                    
+                                    let initialCount = self.orders.count
+                                    self.orders.removeAll { order in
+                                        // Usuwamy tylko jeśli ID jest na liście usuniętych I zamówienie nie jest z dzisiejszego dnia
+                                        return deletedOrderIds.contains(order.id) && order.date < startOfToday
+                                    }
+                                    let removedCount = initialCount - self.orders.count
+                                    print("✅ Usunięto \(removedCount) zamówień z lokalnej listy (zachowano zamówienia z dzisiejszego dnia)")
+                                }
+                            } else {
+                                print("✅ Wszystkie sprawdzane zamówienia istnieją w Baselinker")
+                            }
+                        } else {
+                            // Brak zamówień w odpowiedzi - wszystkie zostały usunięte
+                            print("🗑️ Wszystkie sprawdzane zamówienia zostały usunięte w Baselinker")
+                            
+                            // Usuwamy wszystkie sprawdzane zamówienia z lokalnej listy, ale zachowujemy zamówienia z bieżącego dnia
+                            DispatchQueue.main.async {
+                                let calendar = Calendar.current
+                                let startOfToday = calendar.startOfDay(for: Date())
+                                
+                                let initialCount = self.orders.count
+                                self.orders.removeAll { order in
+                                    // Usuwamy tylko jeśli ID jest na liście sprawdzanych I zamówienie nie jest z dzisiejszego dnia
+                                    return recentOrderIds.contains(order.id) && order.date < startOfToday
+                                }
+                                let removedCount = initialCount - self.orders.count
+                                print("✅ Usunięto \(removedCount) zamówień z lokalnej listy (zachowano zamówienia z dzisiejszego dnia)")
+                            }
+                        }
+                    } else {
+                        // Próbujemy pobrać komunikat błędu z odpowiedzi
+                        let errorMessage: String
+                        do {
+                            if let errorJson = try JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any],
+                               let errorMsg = errorJson["error_message"] as? String {
+                                errorMessage = errorMsg
+                            } else {
+                                errorMessage = "Nieznany błąd"
+                            }
+                        } catch {
+                            errorMessage = "Nieznany błąd: \(error.localizedDescription)"
+                        }
+                        print("❌ Błąd API podczas sprawdzania zamówień: \(errorMessage)")
+                    }
+                } catch {
+                    print("❌ Błąd podczas przetwarzania odpowiedzi: \(error.localizedDescription)")
+                }
+            } else {
+                print("❌ Błąd połączenia z API podczas sprawdzania zamówień")
+            }
         }
     }
 } 

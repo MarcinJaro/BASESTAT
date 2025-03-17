@@ -60,11 +60,9 @@ struct ContentView: View {
                 .tag(2)
                 
                 // Nowa zakładka Podsumowanie Dzienne
-                NavigationView {
-                    TodaySummaryView()
-                }
+                TodaySummaryView()
                 .tabItem {
-                    Label("Podsumowanie", systemImage: "clock")
+                    Label("Podsumowanie", systemImage: "calendar")
                 }
                 .tag(3)
             }
@@ -829,7 +827,7 @@ struct TodaySummaryView: View {
     
     var body: some View {
         NavigationView {
-            Group {
+            VStack {
                 if baselinkerService.isLoading {
                     LoadingView()
                 } else if let error = baselinkerService.error {
@@ -840,7 +838,7 @@ struct TodaySummaryView: View {
                     TodaySummaryContent(todaySummary: baselinkerService.getTodaySummary(), salesData: baselinkerService.getSalesDataForLastWeek())
                 }
             }
-            .navigationTitle("Ostatnie 24h")
+            .navigationTitle("Dzisiaj")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -855,6 +853,22 @@ struct TodaySummaryView: View {
                         }
                     }
                     .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
+                    .help("Odśwież wszystkie zamówienia")
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        baselinkerService.deltaUpdateOrders()
+                    }) {
+                        if baselinkerService.isLoading {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
+                    }
+                    .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
+                    .help("Pobierz tylko nowe zamówienia")
                 }
                 
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -943,9 +957,7 @@ struct TodaySummaryContent: View {
                 TopProductsSection(topProducts: todaySummary.topProducts)
                 
                 // Porównanie z poprzednim dniem
-                if salesData.count >= 2 {
-                    ComparisonSection(salesData: salesData)
-                }
+                ComparisonSection(salesData: salesData)
             }
             .padding(.vertical)
         }
@@ -963,7 +975,7 @@ struct TodaySummaryHeader: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text("Podsumowanie ostatnich 24h")
+                Text("Podsumowanie dzisiejszego dnia")
                     .font(.largeTitle)
                     .fontWeight(.bold)
                 
@@ -972,7 +984,7 @@ struct TodaySummaryHeader: View {
                     .foregroundColor(.gray)
             }
             Spacer()
-            Image(systemName: "clock")
+            Image(systemName: "calendar")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 40, height: 40)
@@ -987,21 +999,21 @@ struct StatisticsGrid: View {
     
     var body: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-            // Liczba zamówień z ostatnich 24h
-            StatCard(title: "Zamówienia (24h)", value: "\(todaySummary.orderCount)", icon: "cart", color: .blue)
+            // Liczba zamówień z dzisiejszego dnia
+            StatCard(title: "Zamówienia (dziś)", value: "\(todaySummary.orderCount)", icon: "cart", color: .blue)
             
-            // Wartość zamówień z ostatnich 24h
-            StatCard(title: "Wartość (24h)", value: String(format: "%.2f zł", todaySummary.totalValue), icon: "dollarsign.circle", color: .green)
+            // Wartość zamówień z dzisiejszego dnia
+            StatCard(title: "Wartość (dziś)", value: String(format: "%.2f zł", todaySummary.totalValue), icon: "dollarsign.circle", color: .green)
             
-            // Nowe zamówienia z ostatnich 24h
-            StatCard(title: "Nowe (24h)", value: "\(todaySummary.newOrdersCount)", icon: "sparkles", color: .orange)
+            // Nowe zamówienia z dzisiejszego dnia
+            StatCard(title: "Nowe (dziś)", value: "\(todaySummary.newOrdersCount)", icon: "sparkles", color: .orange)
             
-            // Średnia wartość zamówienia z ostatnich 24h
+            // Średnia wartość zamówienia z dzisiejszego dnia
             if todaySummary.orderCount > 0 {
                 let avgValue = todaySummary.totalValue / Double(todaySummary.orderCount)
-                StatCard(title: "Średnia (24h)", value: String(format: "%.2f zł", avgValue), icon: "chart.bar.fill", color: .purple)
+                StatCard(title: "Średnia (dziś)", value: String(format: "%.2f zł", avgValue), icon: "chart.bar.fill", color: .purple)
             } else {
-                StatCard(title: "Średnia (24h)", value: "0.00 zł", icon: "chart.bar.fill", color: .purple)
+                StatCard(title: "Średnia (dziś)", value: "0.00 zł", icon: "chart.bar.fill", color: .purple)
             }
         }
         .padding(.horizontal)
@@ -1013,15 +1025,21 @@ struct TopProductsSection: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Najlepiej sprzedające się produkty (24h)")
+            Text("Najlepiej sprzedające się produkty (dziś)")
                 .font(.headline)
                 .padding(.horizontal)
             
             if topProducts.isEmpty {
-                Text("Brak sprzedaży produktów w ostatnich 24h")
-                    .foregroundColor(.gray)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
+                VStack {
+                    Text("Brak sprzedaży produktów w dzisiejszym dniu")
+                        .foregroundColor(.gray)
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .background(Color(.systemBackground))
+                .cornerRadius(10)
+                .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                .padding(.horizontal)
             } else {
                 VStack(spacing: 0) {
                     ForEach(topProducts, id: \.id) { product in
@@ -1138,56 +1156,68 @@ struct ComparisonSection: View {
                 .font(.headline)
                 .padding(.horizontal)
             
-            let todayValue = salesData[salesData.count - 1].value
-            let yesterdayValue = salesData[salesData.count - 2].value
-            
-            let difference = todayValue - yesterdayValue
-            let percentChange = yesterdayValue > 0 ? (difference / yesterdayValue) * 100 : 0
-            
-            HStack {
-                VStack(alignment: .leading) {
-                    Text("Dzisiaj")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                    Text(String(format: "%.2f zł", todayValue))
-                        .font(.title3)
-                        .fontWeight(.bold)
-                }
+            // Sprawdzamy, czy mamy wystarczającą ilość danych
+            if salesData.count >= 2 {
+                let todayValue = salesData[salesData.count - 1].value
+                let yesterdayValue = salesData[salesData.count - 2].value
                 
-                Spacer()
+                let difference = todayValue - yesterdayValue
+                let percentChange = yesterdayValue > 0 ? (difference / yesterdayValue) * 100 : 0
                 
-                VStack(alignment: .leading) {
-                    Text("Wczoraj")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                    Text(String(format: "%.2f zł", yesterdayValue))
-                        .font(.title3)
-                        .fontWeight(.bold)
-                }
-                
-                Spacer()
-                
-                VStack(alignment: .trailing) {
-                    Text("Zmiana")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                    HStack(spacing: 4) {
-                        Image(systemName: difference >= 0 ? "arrow.up" : "arrow.down")
-                            .foregroundColor(difference >= 0 ? .green : .red)
-                        Text(String(format: "%.1f%%", abs(percentChange)))
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text("Dzisiaj")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        Text(String(format: "%.2f zł", todayValue))
                             .font(.title3)
                             .fontWeight(.bold)
-                            .foregroundColor(difference >= 0 ? .green : .red)
+                    }
+                    
+                    Spacer()
+                    
+                    VStack(alignment: .leading) {
+                        Text("Wczoraj")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        Text(String(format: "%.2f zł", yesterdayValue))
+                            .font(.title3)
+                            .fontWeight(.bold)
+                    }
+                    
+                    Spacer()
+                    
+                    VStack(alignment: .trailing) {
+                        Text("Zmiana")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        HStack(spacing: 4) {
+                            Image(systemName: difference >= 0 ? "arrow.up" : "arrow.down")
+                                .foregroundColor(difference >= 0 ? .green : .red)
+                            Text(String(format: "%.1f%%", abs(percentChange)))
+                                .font(.title3)
+                                .fontWeight(.bold)
+                                .foregroundColor(difference >= 0 ? .green : .red)
+                        }
                     }
                 }
+                .padding()
+                .background(Color(.systemBackground))
+                .cornerRadius(10)
+                .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                .padding(.horizontal)
+            } else {
+                // Brak wystarczających danych do porównania
+                Text("Brak wystarczających danych do porównania")
+                    .foregroundColor(.gray)
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(10)
+                    .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                    .padding(.horizontal)
             }
-            .padding()
-            .background(Color(.systemBackground))
-            .cornerRadius(10)
-            .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-            .padding(.horizontal)
         }
-        .padding(.bottom, 20)
     }
 }
 
@@ -1396,21 +1426,6 @@ struct SettingsView: View {
                         }
                     }
                     .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
-                }
-                
-                Section(header: Text("Wygląd")) {
-                    Toggle("Tryb ciemny", isOn: $darkModeEnabled)
-                }
-                
-                Section(header: Text("O aplikacji")) {
-                    HStack {
-                        Text("Wersja")
-                        Spacer()
-                        Text("1.0.0")
-                            .foregroundColor(.gray)
-                    }
-                    
-                    Link("Odwiedź stronę Baselinker", destination: URL(string: "https://baselinker.com")!)
                 }
             }
             .navigationTitle("Ustawienia")
