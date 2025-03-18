@@ -8,26 +8,6 @@
 import SwiftUI
 import UserNotifications
 
-// Funkcja pomocnicza do tworzenia kolorów z wartości hex
-func createColor(from hex: String) -> Color {
-    // Bezpośrednio użyj inicjalizatora Color
-    if let hexColor = Color(hex: hex) {
-        return hexColor
-    }
-    
-    // Fallback dla znanych nazw kolorów
-    switch hex.lowercased() {
-    case "blue": return .blue
-    case "red": return .red
-    case "green": return .green
-    case "orange": return .orange
-    case "yellow": return .yellow
-    case "purple": return .purple
-    case "gray", "grey": return .gray
-    default: return .gray
-    }
-}
-
 struct ContentView: View {
     @ObservedObject var baselinkerService: BaselinkerService
     @State private var selectedTab = 0
@@ -101,7 +81,7 @@ struct ContentView: View {
                 // Nowa zakładka Podsumowanie Dzienne
                 TodaySummaryView()
                 .tabItem {
-                    Label("Dziś", systemImage: "sun.max")
+                    Label("Podsumowanie", systemImage: "calendar")
                 }
                 .tag(3)
             }
@@ -262,12 +242,7 @@ struct DashboardView: View {
                             StatCard(title: "Wartość", value: String(format: "%.2f zł", totalValue), icon: "dollarsign.circle", color: .green)
                             
                             // Rzeczywista liczba nowych zamówień
-                            let newOrders = baselinkerService.orders.filter { 
-                                // Sprawdzamy czy status zamówienia to "1" (nowe) 
-                                $0.status == "1" ||
-                                // Lub czy ma przypisany status, który jest mapowany na "1"
-                                (baselinkerService.statusMappings.getAppStatusId(for: $0.status) == "1")
-                            }.count
+                            let newOrders = baselinkerService.orders.filter { $0.status == OrderStatus.new.rawValue }.count
                             StatCard(title: "Nowe", value: "\(newOrders)", icon: "sparkles", color: .orange)
                             
                             // Rzeczywista średnia wartość zamówienia
@@ -533,8 +508,7 @@ struct OrdersView: View {
                             ForEach(OrderStatus.allCases, id: \.rawValue) { status in
                                 StatusFilterButton(
                                     title: status.displayName,
-                                    isSelected: selectedStatusFilter == status.rawValue,
-                                    customColor: createColor(from: status.color)
+                                    isSelected: selectedStatusFilter == status.rawValue
                                 ) {
                                     selectedStatusFilter = status.rawValue
                                 }
@@ -545,7 +519,7 @@ struct OrdersView: View {
                                 StatusFilterButton(
                                     title: customStatus.name,
                                     isSelected: selectedStatusFilter == customStatus.id,
-                                    customColor: createColor(from: customStatus.color)
+                                    customColor: Color(hex: customStatus.color)
                                 ) {
                                     selectedStatusFilter = customStatus.id
                                 }
@@ -743,6 +717,9 @@ struct OrderRow: View {
             HStack {
                 Text("#\(order.orderNumber)")
                     .font(.headline)
+                    .onAppear {
+                        print("📋 OrderRow: Displaying order #\(order.orderNumber), status: \(order.status), statusName: \(order.statusName ?? "nil"), statusColor: \(order.statusColor ?? "nil")")
+                    }
                 Spacer()
                 OrderStatusBadge(status: order.status, statusName: order.statusName, statusColor: order.statusColor)
             }
@@ -772,6 +749,7 @@ struct OrderRow: View {
 }
 
 struct OrderStatusBadge: View {
+    @EnvironmentObject private var baselinkerService: BaselinkerService
     let status: String
     let statusName: String?
     let statusColor: String?
@@ -794,8 +772,8 @@ struct OrderStatusBadge: View {
         // Określenie koloru statusu
         let color: Color
         if let colorHex = statusColor, !colorHex.isEmpty {
-            // Użyj podanego koloru hex z funkcji pomocniczej
-            color = createColor(from: colorHex)
+            // Użyj podanego koloru hex
+            color = Color(hex: colorHex) ?? fallbackColor
         } else {
             // Użyj domyślnego koloru dla ID statusu
             color = fallbackColor
@@ -807,11 +785,11 @@ struct OrderStatusBadge: View {
     // Pomocnicza funkcja zwracająca domyślny kolor dla ID statusu
     private var fallbackColor: Color {
         switch status {
-        case "1", "4127": return createColor(from: "blue")      // Nowe
-        case "2", "8885": return createColor(from: "orange")    // W realizacji
-        case "3", "4128", "9348": return createColor(from: "green")   // Zakończone
-        case "4", "4130": return createColor(from: "red")       // Anulowane
-        default: return createColor(from: "gray")
+        case "1", "4127": return .blue      // Nowe
+        case "2", "8885": return .orange    // W realizacji
+        case "3", "4128", "9348": return .green   // Zakończone
+        case "4", "4130": return .red       // Anulowane
+        default: return .gray
         }
     }
 }
@@ -1592,6 +1570,28 @@ struct SettingsView: View {
                     }
                     .disabled(baselinkerService.isLoading || !baselinkerService.connectionStatus.isConnected)
                 }
+                
+                // Sekcja - Mapowanie statusów
+                Section(header: Text("Mapowanie statusów")) {
+                    NavigationLink(destination: StatusMappingView(baselinkerService: baselinkerService)) {
+                        HStack {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .foregroundColor(.blue)
+                            Text("Mapowanie statusów Baselinker")
+                        }
+                    }
+                    
+                    NavigationLink(destination: CustomStatusesView(baselinkerService: baselinkerService)) {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                                .foregroundColor(.blue)
+                            Text("Zarządzaj własnymi statusami")
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                
+                Spacer()
             }
             .navigationTitle("Ustawienia")
             .onChange(of: baselinkerService.connectionStatus) { newStatus in
@@ -1982,8 +1982,501 @@ struct InventoryProductRow: View {
     }
 }
 
+// Nowy widok do mapowania statusów
+struct StatusMappingView: View {
+    @ObservedObject var baselinkerService: BaselinkerService
+    @State private var isRefreshing = false
+    
+    var body: some View {
+        List {
+            if baselinkerService.orderStatuses.isEmpty {
+                Section {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 16) {
+                            if isRefreshing {
+                                ProgressView()
+                                    .padding()
+                                Text("Pobieranie statusów...")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            } else {
+                                Text("Brak dostępnych statusów")
+                                    .font(.headline)
+                                    .padding()
+                                Button("Odśwież statusy") {
+                                    refreshStatuses()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                        Spacer()
+                    }
+                }
+            } else {
+                Section(header: Text("Mapuj statusy z Baselinker na statusy aplikacji")) {
+                    ForEach(baselinkerService.orderStatuses, id: \.id) { statusInfo in
+                        StatusMappingRow(
+                            baselinkerService: baselinkerService,
+                            statusInfo: statusInfo,
+                            selectedAppStatusId: baselinkerService.statusMappings.getAppStatusId(for: statusInfo.id) ?? "",
+                            onStatusSelected: { appStatusId in
+                                baselinkerService.setStatusMapping(baselinkerStatusId: statusInfo.id, appStatusId: appStatusId)
+                            }
+                        )
+                    }
+                }
+                
+                Section(header: Text("Informacje")) {
+                    Text("Mapowanie statusów pozwala na przypisanie statusów z Baselinker do standardowych statusów w aplikacji, co poprawia organizację i filtrowanie zamówień.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    
+                    if !baselinkerService.statusMappings.mappings.isEmpty {
+                        Button(role: .destructive) {
+                            baselinkerService.statusMappings = StatusMappings.empty
+                            baselinkerService.saveStatusMappings()
+                            baselinkerService.updateOrderStatusInfo()
+                        } label: {
+                            Text("Wyczyść wszystkie mapowania")
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Mapowanie statusów")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: refreshStatuses) {
+                    Label("Odśwież", systemImage: "arrow.clockwise")
+                }
+                .disabled(isRefreshing)
+            }
+        }
+        .onAppear {
+            if baselinkerService.orderStatuses.isEmpty {
+                refreshStatuses()
+            }
+        }
+    }
+    
+    private func refreshStatuses() {
+        isRefreshing = true
+        baselinkerService.fetchOrderStatusList()
+        
+        // Opóźnienie, aby uniknąć migotania interfejsu
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            isRefreshing = false
+        }
+    }
+}
+
+// Wiersz do mapowania pojedynczego statusu
+struct StatusMappingRow: View {
+    @ObservedObject var baselinkerService: BaselinkerService
+    let statusInfo: OrderStatusInfo
+    let selectedAppStatusId: String
+    let onStatusSelected: (String) -> Void
+    
+    @State private var isExpanded = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Nagłówek z nazwą statusu Baselinker
+            Button(action: { withAnimation { isExpanded.toggle() } }) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(statusInfo.name)
+                            .font(.headline)
+                        
+                        if !selectedAppStatusId.isEmpty {
+                            HStack {
+                                Text("Zmapowano na:")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                
+                                // Wyświetlamy odpowiedni badge w zależności od wybranego statusu
+                                if selectedAppStatusId.hasPrefix("custom_"),
+                                   let customStatus = baselinkerService.customStatuses.getStatus(id: selectedAppStatusId) {
+                                    // Własny status
+                                    Text(customStatus.name)
+                                        .font(.caption)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color(hex: customStatus.color).opacity(0.2))
+                                        .foregroundColor(Color(hex: customStatus.color))
+                                        .cornerRadius(4)
+                                } else {
+                                    // Standardowy status
+                                    switch selectedAppStatusId {
+                                    case "1":
+                                        Text("Nowe")
+                                            .font(.caption)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Color.blue.opacity(0.2))
+                                            .foregroundColor(.blue)
+                                            .cornerRadius(4)
+                                    case "2":
+                                        Text("W realizacji")
+                                            .font(.caption)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Color.orange.opacity(0.2))
+                                            .foregroundColor(.orange)
+                                            .cornerRadius(4)
+                                    case "3":
+                                        Text("Zakończone")
+                                            .font(.caption)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Color.green.opacity(0.2))
+                                            .foregroundColor(.green)
+                                            .cornerRadius(4)
+                                    case "4":
+                                        Text("Anulowane")
+                                            .font(.caption)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Color.red.opacity(0.2))
+                                            .foregroundColor(.red)
+                                            .cornerRadius(4)
+                                    default:
+                                        Text("Nieznany")
+                                            .font(.caption)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Color.gray.opacity(0.2))
+                                            .foregroundColor(.gray)
+                                            .cornerRadius(4)
+                                    }
+                                }
+                            }
+                        } else {
+                            Text("Brak mapowania")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .foregroundColor(.gray)
+                }
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            // Rozwijana lista opcji
+            if isExpanded {
+                Divider()
+                
+                Text("Wybierz status aplikacji:")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+                
+                // Nagłówek dla standardowych statusów
+                HStack {
+                    Text("Standardowe statusy:")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Spacer()
+                }
+                .padding(.top, 4)
+                
+                // Nowe
+                statusButton(appStatusId: "1", name: "Nowe", color: .blue)
+                
+                // W realizacji
+                statusButton(appStatusId: "2", name: "W realizacji", color: .orange)
+                
+                // Zakończone
+                statusButton(appStatusId: "3", name: "Zakończone", color: .green)
+                
+                // Anulowane
+                statusButton(appStatusId: "4", name: "Anulowane", color: .red)
+                
+                // Nagłówek dla własnych statusów, jeśli są dostępne
+                if !baselinkerService.customStatuses.statuses.isEmpty {
+                    HStack {
+                        Text("Własne statusy:")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        Spacer()
+                    }
+                    .padding(.top, 8)
+                    
+                    // Własne statusy
+                    ForEach(baselinkerService.customStatuses.statuses) { customStatus in
+                        statusButton(
+                            appStatusId: customStatus.id,
+                            name: customStatus.name,
+                            color: Color(hex: customStatus.color)
+                        )
+                    }
+                }
+                
+                // Przycisk usuwania mapowania
+                if !selectedAppStatusId.isEmpty {
+                    Button(action: {
+                        onStatusSelected("")
+                        withAnimation { isExpanded = false }
+                    }) {
+                        HStack {
+                            Text("Usuń mapowanie")
+                                .foregroundColor(.red)
+                            
+                            Spacer()
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                
+                Divider()
+            }
+        }
+        .padding(.horizontal)
+        .background(Color(.systemBackground))
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+        )
+        .padding(.vertical, 4)
+    }
+    
+    // Pomocnicza funkcja do tworzenia przycisków statusów
+    private func statusButton(appStatusId: String, name: String, color: Color) -> some View {
+        Button(action: {
+            onStatusSelected(appStatusId)
+            withAnimation { isExpanded = false }
+        }) {
+            HStack {
+                Text(name)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(color.opacity(0.2))
+                    .foregroundColor(color)
+                    .cornerRadius(4)
+                
+                Spacer()
+                
+                if selectedAppStatusId == appStatusId {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(color)
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
 #Preview {
     ContentView(baselinkerService: BaselinkerService())
         .environmentObject(BaselinkerService())
         .environmentObject(NotificationService())
+}
+
+// Widok do zarządzania własnymi statusami
+struct CustomStatusesView: View {
+    @ObservedObject var baselinkerService: BaselinkerService
+    @State private var showingAddStatusSheet = false
+    @State private var editingStatus: CustomOrderStatus? = nil
+    
+    @State private var availableColors = [
+        ("Czerwony", Color.red),
+        ("Niebieski", Color.blue),
+        ("Zielony", Color.green),
+        ("Pomarańczowy", Color.orange),
+        ("Fioletowy", Color.purple),
+        ("Różowy", Color.pink),
+        ("Żółty", Color.yellow),
+        ("Szary", Color.gray)
+    ]
+    
+    var body: some View {
+        List {
+            if baselinkerService.customStatuses.statuses.isEmpty {
+                Section {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 16) {
+                            Text("Brak własnych statusów")
+                                .font(.headline)
+                                .padding()
+                            
+                            Text("Dodaj własny status, aby lepiej organizować zamówienia")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            Button("Dodaj nowy status") {
+                                showingAddStatusSheet = true
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Spacer()
+                    }
+                }
+            } else {
+                Section(header: Text("Twoje własne statusy")) {
+                    ForEach(baselinkerService.customStatuses.statuses) { status in
+                        HStack {
+                            Text(status.name)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color(hex: status.color).opacity(0.2))
+                                .foregroundColor(Color(hex: status.color))
+                                .cornerRadius(4)
+                            
+                            Spacer()
+                            
+                            Button(action: {
+                                editingStatus = status
+                                showingAddStatusSheet = true
+                            }) {
+                                Image(systemName: "pencil")
+                                    .foregroundColor(.blue)
+                            }
+                            
+                            Button(action: {
+                                baselinkerService.removeCustomStatus(id: status.id)
+                            }) {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                        }
+                    }
+                }
+                
+                Section {
+                    Button("Dodaj nowy status") {
+                        editingStatus = nil
+                        showingAddStatusSheet = true
+                    }
+                }
+            }
+        }
+        .navigationTitle("Własne statusy")
+        .sheet(isPresented: $showingAddStatusSheet) {
+            AddEditStatusView(
+                baselinkerService: baselinkerService,
+                statusToEdit: editingStatus,
+                availableColors: availableColors,
+                isPresented: $showingAddStatusSheet
+            )
+        }
+    }
+}
+
+// Widok do dodawania/edycji własnego statusu
+struct AddEditStatusView: View {
+    @ObservedObject var baselinkerService: BaselinkerService
+    let statusToEdit: CustomOrderStatus?
+    let availableColors: [(String, Color)]
+    @Binding var isPresented: Bool
+    
+    @State private var statusName = ""
+    @State private var selectedColorIndex = 0
+    
+    var isEditing: Bool {
+        return statusToEdit != nil
+    }
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Dane statusu")) {
+                    TextField("Nazwa statusu", text: $statusName)
+                    
+                    Picker("Kolor", selection: $selectedColorIndex) {
+                        ForEach(0..<availableColors.count, id: \.self) { index in
+                            HStack {
+                                Circle()
+                                    .fill(availableColors[index].1)
+                                    .frame(width: 16, height: 16)
+                                Text(availableColors[index].0)
+                            }
+                        }
+                    }
+                }
+                
+                Section {
+                    HStack {
+                        Text("Podgląd:")
+                        Spacer()
+                        Text(statusName.isEmpty ? "Nazwa statusu" : statusName)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(availableColors[selectedColorIndex].1.opacity(0.2))
+                            .foregroundColor(availableColors[selectedColorIndex].1)
+                            .cornerRadius(4)
+                    }
+                }
+            }
+            .navigationTitle(isEditing ? "Edytuj status" : "Nowy status")
+            .navigationBarItems(
+                leading: Button("Anuluj") {
+                    isPresented = false
+                },
+                trailing: Button(isEditing ? "Zapisz zmiany" : "Dodaj") {
+                    saveStatus()
+                    isPresented = false
+                }
+                .disabled(statusName.isEmpty)
+            )
+            .onAppear {
+                if let status = statusToEdit {
+                    statusName = status.name
+                    if let colorIndex = availableColors.firstIndex(where: { $0.1 == Color(hex: status.color) ?? .gray }) {
+                        selectedColorIndex = colorIndex
+                    }
+                }
+            }
+        }
+    }
+    
+    private func saveStatus() {
+        let colorHex = availableColors[selectedColorIndex].1.toHex() ?? "#808080"
+        
+        if let status = statusToEdit {
+            // Aktualizacja istniejącego statusu
+            baselinkerService.addOrUpdateCustomStatus(id: status.id, name: statusName, color: colorHex)
+        } else {
+            // Dodanie nowego statusu
+            let newId = "custom_\(UUID().uuidString)"
+            baselinkerService.addOrUpdateCustomStatus(id: newId, name: statusName, color: colorHex)
+        }
+    }
+}
+
+// Rozszerzenie Color, aby konwertować do hex
+extension Color {
+    func toHex() -> String? {
+        // Konwersja Color na UIColor
+        #if canImport(UIKit)
+        let uiColor = UIColor(self)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        
+        uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        
+        return String(
+            format: "#%02X%02X%02X",
+            Int(red * 255),
+            Int(green * 255),
+            Int(blue * 255)
+        )
+        #else
+        return nil
+        #endif
+    }
 }
