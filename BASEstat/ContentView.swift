@@ -8,6 +8,26 @@
 import SwiftUI
 import UserNotifications
 
+// Funkcja pomocnicza do tworzenia kolorów z wartości hex
+func createColor(from hex: String) -> Color {
+    // Bezpośrednio użyj inicjalizatora Color
+    if let hexColor = Color(hex: hex) {
+        return hexColor
+    }
+    
+    // Fallback dla znanych nazw kolorów
+    switch hex.lowercased() {
+    case "blue": return .blue
+    case "red": return .red
+    case "green": return .green
+    case "orange": return .orange
+    case "yellow": return .yellow
+    case "purple": return .purple
+    case "gray", "grey": return .gray
+    default: return .gray
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var baselinkerService: BaselinkerService
     @State private var selectedTab = 0
@@ -433,7 +453,33 @@ struct OrdersView: View {
         }
         
         if let status = selectedStatusFilter {
-            filtered = filtered.filter { $0.status == status }
+            if status.hasPrefix("custom_") {
+                // Filtrowanie dla własnych statusów - musimy uwzględnić mapowania
+                filtered = filtered.filter { order in
+                    // Sprawdzamy czy zamówienie ma zamapowany status Baselinker na wybrany własny status
+                    if let mappedAppStatusId = baselinkerService.statusMappings.getAppStatusId(for: order.status), 
+                       mappedAppStatusId == status {
+                        return true
+                    }
+                    return false
+                }
+            } else {
+                // Filtrowanie dla standardowych statusów (1, 2, 3, 4)
+                filtered = filtered.filter { order in
+                    // Sprawdzamy bezpośrednio status zamówienia
+                    if order.status == status {
+                        return true
+                    }
+                    
+                    // Sprawdzamy czy zamówienie ma zamapowany status Baselinker na standard
+                    if let mappedAppStatusId = baselinkerService.statusMappings.getAppStatusId(for: order.status), 
+                       mappedAppStatusId == status {
+                        return true
+                    }
+                    
+                    return false
+                }
+            }
         }
         
         // Sortowanie zamówień
@@ -478,12 +524,25 @@ struct OrdersView: View {
                                 selectedStatusFilter = nil
                             }
                             
+                            // Standardowe statusy
                             ForEach(OrderStatus.allCases, id: \.rawValue) { status in
                                 StatusFilterButton(
                                     title: status.displayName,
-                                    isSelected: selectedStatusFilter == status.rawValue
+                                    isSelected: selectedStatusFilter == status.rawValue,
+                                    customColor: createColor(from: status.color)
                                 ) {
                                     selectedStatusFilter = status.rawValue
+                                }
+                            }
+                            
+                            // Własne statusy
+                            ForEach(baselinkerService.customStatuses.statuses) { customStatus in
+                                StatusFilterButton(
+                                    title: customStatus.name,
+                                    isSelected: selectedStatusFilter == customStatus.id,
+                                    customColor: createColor(from: customStatus.color)
+                                ) {
+                                    selectedStatusFilter = customStatus.id
                                 }
                             }
                         }
@@ -647,14 +706,24 @@ struct OrdersView: View {
 struct StatusFilterButton: View {
     var title: String
     var isSelected: Bool
+    var customColor: Color?
     var action: () -> Void
+    
+    init(title: String, isSelected: Bool, customColor: Color? = nil, action: @escaping () -> Void) {
+        self.title = title
+        self.isSelected = isSelected
+        self.customColor = customColor
+        self.action = action
+    }
     
     var body: some View {
         Button(action: action) {
             Text(title)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(isSelected ? Color.blue : Color(.systemGray5))
+                .background(isSelected 
+                            ? (customColor?.opacity(0.8) ?? Color.blue) 
+                            : Color(.systemGray5))
                 .foregroundColor(isSelected ? .white : .primary)
                 .cornerRadius(20)
         }
@@ -698,49 +767,9 @@ struct OrderRow: View {
 }
 
 struct OrderStatusBadge: View {
-    var status: String
-    var statusName: String?
-    var statusColor: String?
-    
-    var statusInfo: (name: String, color: Color) {
-        // Jeśli mamy nazwę i kolor statusu z API, użyj ich
-        if let name = statusName, !name.isEmpty {
-            let color: Color
-            if let colorHex = statusColor, !colorHex.isEmpty {
-                color = Color(hex: colorHex) ?? .gray
-            } else {
-                // Fallback do standardowych kolorów
-                guard let orderStatus = OrderStatus(rawValue: status) else {
-                    return ("Nieznany", .gray)
-                }
-                
-                switch orderStatus.color {
-                case "blue": color = .blue
-                case "orange": color = .orange
-                case "green": color = .green
-                case "red": color = .red
-                default: color = .gray
-                }
-            }
-            return (name, color)
-        }
-        
-        // Fallback do standardowych statusów
-        guard let orderStatus = OrderStatus(rawValue: status) else {
-            return ("Nieznany", .gray)
-        }
-        
-        let color: Color
-        switch orderStatus.color {
-        case "blue": color = .blue
-        case "orange": color = .orange
-        case "green": color = .green
-        case "red": color = .red
-        default: color = .gray
-        }
-        
-        return (orderStatus.displayName, color)
-    }
+    let status: String
+    let statusName: String?
+    let statusColor: String?
     
     var body: some View {
         Text(statusInfo.name)
@@ -750,6 +779,35 @@ struct OrderStatusBadge: View {
             .background(statusInfo.color.opacity(0.2))
             .foregroundColor(statusInfo.color)
             .cornerRadius(4)
+    }
+    
+    // Funkcja pomocnicza do określania wyświetlanej nazwy i koloru
+    private var statusInfo: (name: String, color: Color) {
+        // Określenie nazwy statusu
+        let name = statusName ?? "Status \(status)"
+        
+        // Określenie koloru statusu
+        let color: Color
+        if let colorHex = statusColor, !colorHex.isEmpty {
+            // Użyj podanego koloru hex z funkcji pomocniczej
+            color = createColor(from: colorHex)
+        } else {
+            // Użyj domyślnego koloru dla ID statusu
+            color = fallbackColor
+        }
+        
+        return (name, color)
+    }
+    
+    // Pomocnicza funkcja zwracająca domyślny kolor dla ID statusu
+    private var fallbackColor: Color {
+        switch status {
+        case "1", "4127": return createColor(from: "blue")      // Nowe
+        case "2", "8885": return createColor(from: "orange")    // W realizacji
+        case "3", "4128", "9348": return createColor(from: "green")   // Zakończone
+        case "4", "4130": return createColor(from: "red")       // Anulowane
+        default: return createColor(from: "gray")
+        }
     }
 }
 

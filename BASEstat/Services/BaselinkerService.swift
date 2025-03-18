@@ -13,6 +13,7 @@ import UIKit
 #endif
 import UserNotifications
 
+
 // Rozszerzenie dla Dictionary, aby konwertować do JSON string
 extension Dictionary {
     var jsonString: String {
@@ -38,7 +39,7 @@ struct InventoryProduct: Identifiable {
     var attributes: [String: String]
     var lastUpdateDate: Date?
     var isLowStock: Bool {
-        return quantity <= 5 // Definiujemy niski stan magazynowy jako 5 lub mniej sztuk
+        return quantity <= 2 // Definiujemy niski stan magazynowy jako 2 lub mniej sztuk
     }
     
     init(from json: [String: Any]) {
@@ -149,6 +150,12 @@ class BaselinkerService: ObservableObject {
     @Published var orderStatuses: [OrderStatusInfo] = []
     @Published var loadingOrdersProgress: String = ""
     
+    // Nowa zmienna do przechowywania mapowań statusów
+    @Published var statusMappings: StatusMappings = StatusMappings.empty
+    
+    // Zmienna do przechowywania własnych statusów
+    @Published var customStatuses: CustomOrderStatuses = CustomOrderStatuses.empty
+    
     // Nowe zmienne do obsługi produktów
     @Published var inventories: [Inventory] = []
     @Published var inventoryProducts: [InventoryProduct] = []
@@ -207,6 +214,12 @@ class BaselinkerService: ObservableObject {
         self.apiToken = apiToken
         // Wczytaj token z bezpiecznego miejsca, np. Keychain
         loadApiToken()
+        
+        // Wczytaj zapisane mapowania statusów
+        loadStatusMappings()
+        
+        // Wczytaj własne statusy
+        loadCustomStatuses()
     }
     
     private func loadApiToken() {
@@ -649,7 +662,55 @@ class BaselinkerService: ObservableObject {
     
     // Pomocnicza funkcja do znajdowania informacji o statusie
     private func getOrderStatusInfo(for statusId: String) -> OrderStatusInfo? {
-        return orderStatuses.first { $0.id == statusId }
+        print("🔍 GetOrderStatusInfo: Looking for status info for ID: \(statusId)")
+        
+        // Znajdź informacje o oryginalnym statusie Baselinker
+        let baselinkerStatusInfo = orderStatuses.first { $0.id == statusId }
+        
+        if let baselinkerStatusInfo = baselinkerStatusInfo {
+            print("🔍 GetOrderStatusInfo: Found original Baselinker status: \(baselinkerStatusInfo.name), color: \(baselinkerStatusInfo.color)")
+        } else {
+            print("⚠️ GetOrderStatusInfo: No original Baselinker status found for ID: \(statusId)")
+            print("⚠️ GetOrderStatusInfo: Available statuses: \(orderStatuses.map { "\($0.id):\($0.name)" }.joined(separator: ", "))")
+        }
+        
+        // Sprawdź czy istnieje mapowanie dla tego statusu
+        if let appStatusId = statusMappings.getAppStatusId(for: statusId) {
+            print("🔍 GetOrderStatusInfo: Found mapping to app status ID: \(appStatusId)")
+            
+            // Najpierw sprawdź, czy to jest standardowy status
+            if let orderStatus = OrderStatus(rawValue: appStatusId) {
+                // Standardowy status
+                print("✅ GetOrderStatusInfo: Mapped to standard status: \(orderStatus.displayName)")
+                return OrderStatusInfo(
+                    id: statusId,
+                    name: orderStatus.displayName,
+                    nameForCustomer: baselinkerStatusInfo?.nameForCustomer ?? orderStatus.displayName,
+                    color: orderStatus.color
+                )
+            } else if let customStatus = customStatuses.getStatus(id: appStatusId) {
+                // Własny status
+                print("✅ GetOrderStatusInfo: Mapped to custom status: \(customStatus.name)")
+                return OrderStatusInfo(
+                    id: statusId,
+                    name: customStatus.name,
+                    nameForCustomer: baselinkerStatusInfo?.nameForCustomer ?? customStatus.name,
+                    color: customStatus.color
+                )
+            } else {
+                print("⚠️ GetOrderStatusInfo: Mapping exists but target status (ID: \(appStatusId)) not found")
+            }
+        } else {
+            print("🔍 GetOrderStatusInfo: No mapping found for status ID: \(statusId)")
+        }
+        
+        // Jeśli nie ma mapowania, zwróć oryginalny status z Baselinker
+        if baselinkerStatusInfo != nil {
+            print("✅ GetOrderStatusInfo: Using original Baselinker status as fallback")
+        } else {
+            print("❌ GetOrderStatusInfo: No status info found, returning nil")
+        }
+        return baselinkerStatusInfo
     }
     
     // Funkcja pomocnicza do wysyłania żądań API
@@ -1496,6 +1557,8 @@ class BaselinkerService: ObservableObject {
     
     // Funkcja do pobierania listy statusów zamówień
     func fetchOrderStatusList() {
+        print("🔄 FetchOrderStatusList: Rozpoczynam pobieranie statusów zamówień")
+        
         let parameters: [String: Any] = [
             "method": "getOrderStatusList",
             "parameters": [:]
@@ -1531,6 +1594,9 @@ class BaselinkerService: ObservableObject {
                             self.orderStatuses = orderStatusList
                             print("Pobrano \(orderStatusList.count) statusów zamówień")
                             
+                            // Ustawienie domyślnych mapowań dla znanych statusów
+                            self.setupDefaultStatusMappings()
+                            
                             // Aktualizujemy informacje o statusach dla istniejących zamówień
                             self.updateOrderStatusInfo()
                         }
@@ -1546,13 +1612,53 @@ class BaselinkerService: ObservableObject {
         }
     }
     
-    // Funkcja do aktualizacji informacji o statusach dla istniejących zamówień
-    private func updateOrderStatusInfo() {
+    // Aktualizuje informacje o statusie dla wszystkich zamówień
+    func updateOrderStatusInfo() {
+        print("🔄 UpdateOrderStatusInfo: Updating status info for \(orders.count) orders")
+        
+        // Zaktualizuj informacje o statusie dla wszystkich zamówień
         for i in 0..<orders.count {
+            print("🔄 UpdateOrderStatusInfo: Processing order #\(orders[i].orderNumber), status ID: \(orders[i].status)")
+            
             if let statusInfo = getOrderStatusInfo(for: orders[i].status) {
+                print("✅ UpdateOrderStatusInfo: Found status info - name: \(statusInfo.name), color: \(statusInfo.color)")
                 orders[i].statusName = statusInfo.name
                 orders[i].statusColor = statusInfo.color
+            } else {
+                print("❌ UpdateOrderStatusInfo: No status info found for order #\(orders[i].orderNumber), status ID: \(orders[i].status)")
+                // Przypisz domyślne wartości na podstawie ID statusu
+                assignDefaultStatusInfo(to: &orders[i])
             }
+        }
+        
+        print("✅ UpdateOrderStatusInfo: Finished updating status info for all orders")
+    }
+    
+    // Przypisuje domyślne informacje o statusie na podstawie ID statusu
+    private func assignDefaultStatusInfo(to order: inout Order) {
+        // Zakończone - ID statusów 4128 i 9348
+        if order.status == "4128" || order.status == "9348" {
+            print("🏷️ AssignDefaultStatusInfo: Assigning default 'Completed' status for order #\(order.orderNumber)")
+            order.statusName = "Zakończone"
+            order.statusColor = "green"
+        }
+        // Anulowane - ID statusu 4130
+        else if order.status == "4130" {
+            print("🏷️ AssignDefaultStatusInfo: Assigning default 'Canceled' status for order #\(order.orderNumber)")
+            order.statusName = "Anulowane"
+            order.statusColor = "red"
+        }
+        // W realizacji - ID statusu 8885
+        else if order.status == "8885" {
+            print("🏷️ AssignDefaultStatusInfo: Assigning default 'Processing' status for order #\(order.orderNumber)")
+            order.statusName = "W realizacji"
+            order.statusColor = "orange"
+        }
+        // Domyślnie - Nowe
+        else {
+            print("🏷️ AssignDefaultStatusInfo: Assigning default status name for order #\(order.orderNumber)")
+            order.statusName = "Status \(order.status)"
+            order.statusColor = "blue"
         }
     }
     
@@ -1728,5 +1834,112 @@ class BaselinkerService: ObservableObject {
         
         print("⚠️ Debug: Nie znaleziono notificationService - zwracam nil")
         return nil
+    }
+    
+    // Funkcja do wczytywania zapisanych mapowań statusów
+    private func loadStatusMappings() {
+        if let data = UserDefaults.standard.data(forKey: "status_mappings"),
+           let mappings = try? JSONDecoder().decode(StatusMappings.self, from: data) {
+            self.statusMappings = mappings
+        } else {
+            self.statusMappings = StatusMappings.empty
+        }
+        
+        // Ustawienie domyślnych mapowań dla znanych statusów
+        setupDefaultStatusMappings()
+    }
+    
+    // Funkcja do ustawiania domyślnych mapowań dla znanych statusów
+    private func setupDefaultStatusMappings() {
+        print("🔄 SetupDefaultStatusMappings: Setting up default status mappings")
+        
+        // Mapowanie statusów zakończonych (4128 i 9348) na standardowy status "3"
+        let completedStatusIds = ["4128", "9348"]
+        for statusId in completedStatusIds {
+            if statusMappings.getAppStatusId(for: statusId) == nil {
+                print("🔄 SetupDefaultStatusMappings: Mapping status \(statusId) to standard Completed status (3)")
+                statusMappings.setMapping(baselinkerStatusId: statusId, appStatusId: "3")
+            }
+        }
+        
+        // Mapowanie statusów w realizacji (8885) na standardowy status "2"
+        let processingStatusIds = ["8885"]
+        for statusId in processingStatusIds {
+            if statusMappings.getAppStatusId(for: statusId) == nil {
+                print("🔄 SetupDefaultStatusMappings: Mapping status \(statusId) to standard Processing status (2)")
+                statusMappings.setMapping(baselinkerStatusId: statusId, appStatusId: "2")
+            }
+        }
+        
+        // Mapowanie statusów anulowanych (4130) na standardowy status "4"
+        let canceledStatusIds = ["4130"]
+        for statusId in canceledStatusIds {
+            if statusMappings.getAppStatusId(for: statusId) == nil {
+                print("🔄 SetupDefaultStatusMappings: Mapping status \(statusId) to standard Canceled status (4)")
+                statusMappings.setMapping(baselinkerStatusId: statusId, appStatusId: "4")
+            }
+        }
+        
+        // Zapisz mapowania
+        saveStatusMappings()
+    }
+    
+    // Funkcja do zapisywania mapowań statusów
+    func saveStatusMappings() {
+        if let data = try? JSONEncoder().encode(statusMappings) {
+            UserDefaults.standard.set(data, forKey: "status_mappings")
+        }
+    }
+    
+    // Funkcja do ustawiania mapowania statusu
+    func setStatusMapping(baselinkerStatusId: String, appStatusId: String) {
+        statusMappings.setMapping(baselinkerStatusId: baselinkerStatusId, appStatusId: appStatusId)
+        saveStatusMappings()
+        
+        // Zaktualizuj statusy zamówień aby odzwierciedlić nowe mapowanie
+        updateOrderStatusInfo()
+    }
+    
+    // Funkcja do wczytywania własnych statusów
+    private func loadCustomStatuses() {
+        if let data = UserDefaults.standard.data(forKey: "custom_statuses"),
+           let statuses = try? JSONDecoder().decode(CustomOrderStatuses.self, from: data) {
+            self.customStatuses = statuses
+        } else {
+            self.customStatuses = CustomOrderStatuses.empty
+        }
+    }
+    
+    // Funkcja do zapisywania własnych statusów
+    func saveCustomStatuses() {
+        if let data = try? JSONEncoder().encode(customStatuses) {
+            UserDefaults.standard.set(data, forKey: "custom_statuses")
+        }
+    }
+    
+    // Funkcja do dodawania/aktualizacji własnego statusu
+    func addOrUpdateCustomStatus(id: String, name: String, color: String) {
+        customStatuses.addOrUpdateStatus(id: id, name: name, color: color)
+        saveCustomStatuses()
+        
+        // Zaktualizuj statusy zamówień aby odzwierciedlić zmiany
+        updateOrderStatusInfo()
+    }
+    
+    // Funkcja do usuwania własnego statusu
+    func removeCustomStatus(id: String) {
+        customStatuses.removeStatus(id: id)
+        saveCustomStatuses()
+        
+        // Usuń mapowania korzystające z usuniętego statusu
+        for mapping in statusMappings.mappings {
+            if mapping.appStatusId == id {
+                statusMappings.setMapping(baselinkerStatusId: mapping.baselinkerStatusId, appStatusId: "")
+            }
+        }
+        saveStatusMappings()
+        
+        // Zaktualizuj statusy zamówień
+        updateOrderStatusInfo()
     }
 } 

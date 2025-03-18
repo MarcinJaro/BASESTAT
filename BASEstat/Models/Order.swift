@@ -209,6 +209,7 @@ struct OrdersResponse: Codable {
     var orders: [Order]
 }
 
+// Podstawowe predefiniowane statusy
 enum OrderStatus: String, CaseIterable {
     case new = "1"
     case processing = "2"
@@ -246,5 +247,76 @@ struct OrderStatusInfo: Identifiable, Codable {
         case name
         case nameForCustomer = "name_for_customer"
         case color
+    }
+}
+
+// Nowy model do przechowywania własnych statusów użytkownika
+struct CustomOrderStatus: Identifiable, Codable, Equatable {
+    var id: String
+    var name: String
+    var color: String
+    
+    static func == (lhs: CustomOrderStatus, rhs: CustomOrderStatus) -> Bool {
+        return lhs.id == rhs.id
+    }
+}
+
+// Kolekcja własnych statusów użytkownika
+struct CustomOrderStatuses: Codable {
+    var statuses: [CustomOrderStatus]
+    
+    // Pobiera status o podanym ID lub nil, jeśli nie znaleziono
+    func getStatus(id: String) -> CustomOrderStatus? {
+        return statuses.first { $0.id == id }
+    }
+    
+    // Dodaje nowy status lub aktualizuje istniejący
+    mutating func addOrUpdateStatus(id: String, name: String, color: String) {
+        if let index = statuses.firstIndex(where: { $0.id == id }) {
+            statuses[index].name = name
+            statuses[index].color = color
+        } else {
+            let newStatus = CustomOrderStatus(id: id, name: name, color: color)
+            statuses.append(newStatus)
+        }
+    }
+    
+    // Usuwa status o podanym ID
+    mutating func removeStatus(id: String) {
+        statuses.removeAll { $0.id == id }
+    }
+    
+    static var empty: CustomOrderStatuses {
+        return CustomOrderStatuses(statuses: [])
+    }
+}
+
+// Nowa struktura do przechowywania mapowań statusów
+struct StatusMapping: Codable, Equatable {
+    var baselinkerStatusId: String
+    var appStatusId: String
+    
+    static func == (lhs: StatusMapping, rhs: StatusMapping) -> Bool {
+        return lhs.baselinkerStatusId == rhs.baselinkerStatusId && lhs.appStatusId == rhs.appStatusId
+    }
+}
+
+// Kolekcja mapowań statusów dla użytkownika
+struct StatusMappings: Codable {
+    var mappings: [StatusMapping]
+    
+    func getAppStatusId(for baselinkerStatusId: String) -> String? {
+        return mappings.first(where: { $0.baselinkerStatusId == baselinkerStatusId })?.appStatusId
+    }
+    
+    mutating func setMapping(baselinkerStatusId: String, appStatusId: String) {
+        // Usuń istniejące mapowanie jeśli istnieje
+        mappings.removeAll(where: { $0.baselinkerStatusId == baselinkerStatusId })
+        // Dodaj nowe
+        mappings.append(StatusMapping(baselinkerStatusId: baselinkerStatusId, appStatusId: appStatusId))
+    }
+    
+    static var empty: StatusMappings {
+        return StatusMappings(mappings: [])
     }
 } 
